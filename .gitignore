@@ -1,0 +1,37 @@
+# Game data: never commit (ROMs, the Steam release, saves, RAM/VRAM dumps, screenshots, derived art)
+*.gen
+*.bin
+*.state
+*.state.png
+*.mds
+*.nv
+*.vram
+*.cram
+*.png
+*.7z
+/zero_tolerance_steam/
+/nvram/
+/cfg/
+port/samples/
+port/images/
+patch/steam/
+patch/steam_hd/res/
+
+# Build outputs and third-party binaries (build them; see README.md)
+*.ips
+*.dll
+*.dylib
+*.so
+*.exe
+*.zip
+*.o
+patch/tools/vasmm68k_mot
+patch/tools/*.local.cfg
+patch/windows/zt-hd-retroarch.cfg
+
+# OS / editor / Python
+.DS_Store
+__pycache__/
+*.pyc
+.vscode/
+.idea/

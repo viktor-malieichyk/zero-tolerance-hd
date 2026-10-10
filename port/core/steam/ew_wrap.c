@@ -1,0 +1,384 @@
+/*
+ * ew_core.dll for the Steam release of Zero Tolerance (QUByte's "zero tolerance.exe" frontend), running
+ * Genesis Plus GX with the Zero Tolerance HD renderer instead of the shipped Mednafen core.
+ *
+ * Implements the frontend's ew_* interface (src/ew_core/ew_core.h in the release's src.7z) on top of the
+ * libretro core linked into the same DLL. Settings: zt_hd.cfg next to this DLL (written by the in-game
+ * menu, M), optional ew_core_options.cfg there for core options (key = "value" lines, as RetroArch writes).
+ *
+ * Frontend facts this relies on (zero tolerance.exe, traced):
+ * - right after ew_core_init it allocates its render buffer with malloc(screen_w * screen_h) BYTES, then
+ *   ew_video_render writes raster_w * raster_h * 4 bytes into it: the first screen size after init is
+ *   reported large enough for the biggest HD output;
+ * - the viewport is computed from the screen size (in integer-scaling mode as whole multiples of it), the
+ *   texture from the raster size: later calls report a small screen with the output's aspect ratio;
+ * - pixels are 32-bit, R in bits 0-7, G 8-15, B 16-23 (Mednafen's MakeColor with alpha 0);
+ * - ew_core_init(44100, options): options bit 0 = no SRAM, bit 1 = -turbo (unused here).
+ */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include "libretro.h"
+
+#define API __declspec(dllexport)
+
+static HMODULE self;
+static char dir[MAX_PATH];                 /* this DLL's folder, with a trailing separator */
+static unsigned pixfmt = RETRO_PIXEL_FORMAT_0RGB1555;
+static int fw = 320, fh = 224;              /* last video frame's size */
+static int16_t audio[4096 * 2];
+static int naudio;
+static uint16_t pad[2];                    /* libretro joypad bits per player */
+static int alloc_pending;
+
+/* ---------------------------------------------------------------- core options */
+static struct { char key[64], val[64]; } opts[128];
+static int nopts;
+
+static void opt_set(const char *k, const char *v)
+{
+  int i;
+  for (i = 0; i < nopts; i++) if (!strcmp(opts[i].key, k)) break;
+  if (i == nopts) { if (nopts == 128) return; nopts++; }
+  snprintf(opts[i].key, sizeof opts[i].key, "%s", k);
+  snprintf(opts[i].val, sizeof opts[i].val, "%s", v);
+}
+
+static void opts_load(void)
+{
+  char path[MAX_PATH + 32], line[256], k[64], v[64];
+  FILE *f;
+  opt_set("genesis_plus_gx_zt_hd", "enabled");
+  opt_set("genesis_plus_gx_zt_hd_res", "1920x1080");
+  opt_set("genesis_plus_gx_zt_hd_fov", "106");
+  opt_set("genesis_plus_gx_zt_hd_layout", "toggle");
+  opt_set("genesis_plus_gx_zt_hd_toggle_key", "g");
+  opt_set("genesis_plus_gx_zt_hd_menu_key", "m");
+  opt_set("genesis_plus_gx_zt_hd_ui_scale", "auto");
+  opt_set("genesis_plus_gx_zt_hd_weapon", "shown");
+  opt_set("genesis_plus_gx_zt_hd_sky", "original");
+  opt_set("genesis_plus_gx_zt_hd_sky_ext", "full_planet");
+  opt_set("genesis_plus_gx_zt_hd_shading", "smooth");
+  opt_set("genesis_plus_gx_overclock", "100");
+  opt_set("genesis_plus_gx_region_detect", "auto");
+  snprintf(path, sizeof path, "%sew_core_options.cfg", dir);
+  if (!(f = fopen(path, "r"))) return;
+  while (fgets(line, sizeof line, f))
+    if (sscanf(line, " %63[^= ] = \"%63[^\"]\"", k, v) == 2) opt_set(k, v);
+  fclose(f);
+}
+
+/* the output size the core will produce (zt_hd_output_size), from the options: needed before the first frame,
+   because the frontend sizes its window from the screen size right at startup */
+static void expected_output(int *w, int *h)
+{
+  int i, rw = 1920, rh = 1080, pw, ph, layout = 3;
+  for (i = 0; i < nopts; i++)
+  {
+    if (!strcmp(opts[i].key, "genesis_plus_gx_zt_hd_res")) sscanf(opts[i].val, "%dx%d", &rw, &rh);
+    if (!strcmp(opts[i].key, "genesis_plus_gx_zt_hd_layout"))
+      layout = !strcmp(opts[i].val, "side_by_side") ? 1 : !strcmp(opts[i].val, "top_bottom") ? 2 : !strcmp(opts[i].val, "toggle") ? 3 : 0;
+  }
+  if (rw < 320 || rw > 7680 || rh < 224 || rh > 4320) { rw = 1920; rh = 1080; }
+  pw = rw / 2; ph = (pw * 9 / 16) & ~1;
+  if (layout == 1) { *w = rw; *h = ph; }
+  else if (layout == 2) { *w = pw; *h = 2 * ph; }
+  else { *w = rw; *h = rh; }
+}
+
+/* ---------------------------------------------------------------- libretro callbacks */
+static bool env_cb(unsigned cmd, void *data)
+{
+  switch (cmd & 0xFFFF)
+  {
+    case RETRO_ENVIRONMENT_GET_VARIABLE:
+    {
+      struct retro_variable *v = data;
+      int i;
+      v->value = NULL;
+      for (i = 0; i < nopts; i++) if (!strcmp(opts[i].key, v->key)) { v->value = opts[i].val; return true; }
+      return false;
+    }
+    case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
+      pixfmt = *(const unsigned *)data;
+      return pixfmt == RETRO_PIXEL_FORMAT_RGB565 || pixfmt == RETRO_PIXEL_FORMAT_XRGB8888 || pixfmt == RETRO_PIXEL_FORMAT_0RGB1555;
+    case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
+    case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
+      *(const char **)data = dir;
+      return true;
+    case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
+      *(bool *)data = false;
+      return true;
+    case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
+      return true;
+    case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
+    case RETRO_ENVIRONMENT_SET_GEOMETRY:
+    case RETRO_ENVIRONMENT_SET_MESSAGE:
+    case RETRO_ENVIRONMENT_SET_VARIABLES:
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS:
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2:
+    case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
+    case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
+    case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:
+    case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY:
+      return true;
+    case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION:
+      *(unsigned *)data = 0;                  /* plain SET_VARIABLES; values come from opts[] anyway */
+      return true;
+    case RETRO_ENVIRONMENT_GET_LANGUAGE:
+      *(unsigned *)data = RETRO_LANGUAGE_ENGLISH;
+      return true;
+  }
+  return false;
+}
+
+/* the core's last frame: valid until the next retro_run (the HD output and the emulator's bitmap are
+   persistent buffers), so it is converted straight into the frontend's buffer in ew_video_render */
+static const void *vdata;
+static size_t vpitch;
+
+static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
+{
+  if (!data || !w || !h) return;               /* frame duplicated: keep the last one */
+  vdata = data; vpitch = pitch; fw = w; fh = h;
+}
+
+static void convert(uint32_t *dst)
+{
+  int x, y;
+  for (y = 0; y < fh; y++)
+  {
+    const uint8_t *row = (const uint8_t *)vdata + y * vpitch;
+    uint32_t *out = dst + y * fw;
+    if (pixfmt == RETRO_PIXEL_FORMAT_XRGB8888)
+      for (x = 0; x < fw; x++)
+      {
+        uint32_t c = ((const uint32_t *)row)[x];
+        out[x] = ((c >> 16) & 255) | (c & 0xFF00) | (c & 255) << 16;
+      }
+    else if (pixfmt == RETRO_PIXEL_FORMAT_RGB565)
+      for (x = 0; x < fw; x++)
+      {
+        uint32_t c = ((const uint16_t *)row)[x], r = (c >> 11) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
+        out[x] = (r | r >> 5) | (g | g >> 6) << 8 | (b | b >> 5) << 16;
+      }
+    else
+      for (x = 0; x < fw; x++)
+      {
+        uint32_t c = ((const uint16_t *)row)[x];
+        out[x] = ((c >> 10) & 31) << 3 | (((c >> 5) & 31) << 3) << 8 | ((c & 31) << 3) << 16;
+      }
+  }
+}
+
+static void audio_one(int16_t l, int16_t r)
+{
+  if (naudio < 4096) { audio[naudio * 2] = l; audio[naudio * 2 + 1] = r; naudio++; }
+}
+
+static size_t audio_batch(const int16_t *d, size_t frames)
+{
+  size_t i;
+  for (i = 0; i < frames; i++) audio_one(d[i * 2], d[i * 2 + 1]);
+  return frames;
+}
+
+static void poll_cb(void) {}
+
+/* keyboard keys for the HD renderer's own controls (menu, view switch): read directly, only while one of
+   this process's windows has the focus */
+static int key_down(unsigned retrok)
+{
+  int vk;
+  DWORD pid = 0;
+  HWND fg = GetForegroundWindow();
+  if (!fg) return 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (pid != GetCurrentProcessId()) return 0;
+  if (retrok >= 'a' && retrok <= 'z') vk = 'A' + retrok - 'a';
+  else if (retrok >= '0' && retrok <= '9') vk = retrok;
+  else switch (retrok)
+  {
+    case 9: vk = VK_TAB; break;
+    case 13: vk = VK_RETURN; break;
+    case 27: vk = VK_ESCAPE; break;
+    case 96: vk = VK_OEM_3; break;
+    case 273: vk = VK_UP; break;
+    case 274: vk = VK_DOWN; break;
+    case 275: vk = VK_RIGHT; break;
+    case 276: vk = VK_LEFT; break;
+    default: return 0;
+  }
+  return (GetAsyncKeyState(vk) & 0x8000) != 0;
+}
+
+static int16_t input_cb(unsigned port, unsigned device, unsigned index, unsigned id)
+{
+  (void)index;
+  if (device == RETRO_DEVICE_KEYBOARD) return key_down(id);
+  if (device != RETRO_DEVICE_JOYPAD || port > 1) return 0;
+  if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return pad[port];
+  return id < 16 ? (pad[port] >> id) & 1 : 0;
+}
+
+/* ---------------------------------------------------------------- ew_* interface */
+BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
+{
+  (void)r;
+  if (reason == DLL_PROCESS_ATTACH)
+  {
+    char *s;
+    self = h;
+    GetModuleFileNameA(h, dir, sizeof dir);
+    s = strrchr(dir, '\\'); if (!s) s = strrchr(dir, '/');
+    if (s) s[1] = 0; else strcpy(dir, ".\\");
+  }
+  return TRUE;
+}
+
+API bool ew_core_init(int sample_rate, unsigned int options)
+{
+  (void)sample_rate; (void)options;           /* the core outputs 44100 Hz, which is what the frontend asks for */
+  opts_load();
+  expected_output(&fw, &fh);                   /* the window is sized from this before any frame exists */
+  retro_set_environment(env_cb);
+  retro_set_video_refresh(video_cb);
+  retro_set_audio_sample(audio_one);
+  retro_set_audio_sample_batch(audio_batch);
+  retro_set_input_poll(poll_cb);
+  retro_set_input_state(input_cb);
+  retro_init();
+  alloc_pending = 2;                          /* the next screen width and height size the render buffer */
+  return true;
+}
+
+API void ew_core_shut(void)
+{
+  retro_unload_game();
+  retro_deinit();
+  vdata = NULL;
+}
+
+API bool ew_core_load(const char *filename)
+{
+  static void *data;
+  static size_t size;
+  struct retro_game_info gi;
+  FILE *f = fopen(filename, "rb");
+  long n;
+  if (!f) return false;
+  fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+  free(data); data = malloc(n); size = n;
+  if (!data || fread(data, 1, n, f) != (size_t)n) { fclose(f); return false; }
+  fclose(f);
+  memset(&gi, 0, sizeof gi);
+  gi.path = filename; gi.data = data; gi.size = size;
+  if (!retro_load_game(&gi)) return false;
+  retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+  retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
+  return true;
+}
+
+API void ew_core_reset(void) { retro_reset(); }
+
+API void ew_core_emulate(void)
+{
+  naudio = 0;
+  retro_run();
+}
+
+#define ALLOC_W 7680                         /* 7680 * 4320 bytes = 3840 * 2160 pixels of 4 bytes */
+#define ALLOC_H 4320
+#define VIEW_W 320                           /* viewport base size: small, so integer scaling always fits */
+
+API int ew_video_get_screen_width(void)
+{
+  if (alloc_pending == 2) { alloc_pending = 1; return ALLOC_W; }
+  return VIEW_W;
+}
+
+API int ew_video_get_screen_height(void)
+{
+  if (alloc_pending == 1) { alloc_pending = 0; return ALLOC_H; }
+  return fw > 0 ? (VIEW_W * fh + fw / 2) / fw : 180;   /* the output's aspect ratio */
+}
+
+API int ew_video_get_raster_width(void) { return fw; }
+API int ew_video_get_raster_height(void) { return fh; }
+
+API int ew_video_get_framerate(void)
+{
+  struct retro_system_av_info av;
+  retro_get_system_av_info(&av);
+  return av.timing.fps < 55 ? 50 : 60;
+}
+
+API void ew_video_render(unsigned int *dst)
+{
+  if (!dst) return;
+  if (vdata) convert(dst);
+  else memset(dst, 0, sizeof(uint32_t) * fw * fh);     /* before the first frame */
+}
+
+API int ew_audio_render(signed short *buf, int max_samples)
+{
+  int n = naudio < max_samples ? naudio : max_samples;
+  memcpy(buf, audio, n * 2 * sizeof(int16_t));
+  return n;
+}
+
+/* the frontend's button list (as in its Mednafen MD build); libretro ids each maps to */
+static const char *names[12] = {"Up", "Down", "Left", "Right", "A", "B", "C", "Start", "X", "Y", "Z", "Mode"};
+static const int retro_id[12] = {
+  RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
+  RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_START,
+  RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_SELECT };
+/* SDL scancodes: Up, Down, Left, Right, Z, X, C, Return, A, S, D, Space */
+static const int def_keys[12] = {82, 81, 80, 79, 29, 27, 6, 40, 4, 22, 7, 44};
+/* SDL hat directions, then joystick buttons */
+static const int def_joy[12] = {1, 4, 8, 2, 0, 1, 5, 7, 2, 3, 4, 6};
+
+API int ew_button_get_count(void) { return 12; }
+API const char *ew_button_get_name(int id) { return id >= 0 && id < 12 ? names[id] : NULL; }
+API int ew_button_get_default_keyboard(int id) { return id >= 0 && id < 12 ? def_keys[id] : 0; }
+API int ew_button_get_default_joystick(int id) { return id >= 0 && id < 12 ? def_joy[id] : 0; }
+
+API void ew_button_set_state(int player, int id, bool state)
+{
+  if (player < 0 || player > 1 || id < 0 || id >= 12) return;
+  if (state) pad[player] |= 1 << retro_id[id]; else pad[player] &= ~(1 << retro_id[id]);
+}
+
+API bool ew_state_save(const char *filename)
+{
+  size_t n = retro_serialize_size();
+  void *b = malloc(n);
+  FILE *f;
+  bool ok = false;
+  if (b && retro_serialize(b, n) && (f = fopen(filename, "wb")))
+  {
+    ok = fwrite(b, 1, n, f) == n;
+    fclose(f);
+  }
+  free(b);
+  return ok;
+}
+
+API bool ew_state_load(const char *filename)
+{
+  FILE *f = fopen(filename, "rb");
+  long n;
+  void *b;
+  bool ok = false;
+  if (!f) return false;
+  fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+  b = malloc(n);
+  if (b && fread(b, 1, n, f) == (size_t)n) ok = retro_unserialize(b, n);
+  fclose(f);
+  free(b);
+  return ok;
+}

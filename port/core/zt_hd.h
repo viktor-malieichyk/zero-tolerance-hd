@@ -1,0 +1,21 @@
+#ifndef ZT_HD_H
+#define ZT_HD_H
+/* Zero Tolerance HD renderer (see zt_hd.c) */
+extern int zt_hd_enabled;
+extern int zt_hd_w, zt_hd_h;
+extern float zt_hd_fov;
+extern int zt_hd_layout;
+extern float zt_hd_ui_scale;
+void zt_hd_output_size(int *w, int *h);
+extern int zt_hd_weapon, zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth;
+extern unsigned zt_hd_toggle_key, zt_hd_menu_key;
+extern int (*zt_hd_key)(unsigned retrok);
+extern void (*zt_hd_av_changed)(void);
+extern char zt_hd_cfg_path[1024], zt_hd_rom_dir[1024];
+int zt_hd_input(void);
+void zt_hd_load_cfg(void);
+void zt_hd_save_cfg(void);
+extern unsigned int zt_hd_after_pc;
+void zt_hd_hook(unsigned int pc, unsigned int *regs);
+unsigned short *zt_hd_compose(const unsigned short *native, int npitch, int nw, int nh);
+#endif
