@@ -7,7 +7,7 @@ extern float zt_hd_fov;
 extern int zt_hd_layout;
 extern float zt_hd_ui_scale;
 void zt_hd_output_size(int *w, int *h);
-extern int zt_hd_weapon, zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth;
+extern int zt_hd_weapon, zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_stretch_native;
 extern unsigned zt_hd_toggle_key, zt_hd_menu_key;
 extern int (*zt_hd_key)(unsigned retrok);
 extern void (*zt_hd_av_changed)(void);

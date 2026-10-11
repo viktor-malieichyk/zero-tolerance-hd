@@ -327,8 +327,29 @@ API bool ew_core_load(const char *filename)
 
 API void ew_core_reset(void) { retro_reset(); }
 
+/* the frontend's Stretch setting (menu and res\conf "stretch"): a byte in zero tolerance.exe's settings
+   (scale dword at $69C80 from the image base, then smoothing, stretch, fullscreen bytes). The frontend
+   applies it to the screen size this DLL reports, which is always the HD output's 16:9; the original
+   320x224 screens inside that output (title, menus, original view) are stretched here instead. Checked
+   against the exe's "stretch" config key string so another frontend build is left alone. */
+extern int zt_hd_stretch_native;
+static const volatile unsigned char *frontend_stretch(void)
+{
+  static int tried;
+  static const volatile unsigned char *flag;
+  if (!tried)
+  {
+    const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
+    tried = 1;
+    if (base && !memcmp(base + 0x5C7D8, "stretch", 8)) flag = base + 0x69C85;
+  }
+  return flag;
+}
+
 API void ew_core_emulate(void)
 {
+  const volatile unsigned char *st = frontend_stretch();
+  if (st) zt_hd_stretch_native = *st != 0;
   naudio = 0;
   retro_run();
 }

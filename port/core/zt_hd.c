@@ -22,6 +22,7 @@ int zt_hd_layout = 0;                /* 0 HD only, 1 side by side, 2 top/bottom,
 float zt_hd_ui_scale = 0;            /* HUD scale; 0 = automatic (output height / 360) */
 int zt_hd_weapon = 1;                /* draw the player's weapon sprite in the HD view */
 int zt_hd_smooth = 1;                /* shading dither: 1 blend each pixel pair's two colours, 0 draw the pattern */
+int zt_hd_stretch_native;            /* non-3D screens (title, menus, original view) fill their panel instead of keeping 320x224's shape */
 int zt_hd_sky_fill = 0;              /* scale the sky to fill the view height (aspect kept) */
 int zt_hd_sky_ext = 2;               /* beyond the original sky band: 0 black, 1 the level's stars repeated,
                                         2 stars and the planet completed */
@@ -1327,7 +1328,7 @@ static void fill(int dx, int dy, int dw, int dh, uint16 c)
 static void panel_native(const uint16 *native, int npitch, int nw, int nh, int px, int py, int pw, int ph)
 {
   double sc = (double)pw / nw < (double)ph / nh ? (double)pw / nw : (double)ph / nh;
-  int dw = (int)(nw * sc), dh = (int)(nh * sc);
+  int dw = zt_hd_stretch_native ? pw : (int)(nw * sc), dh = zt_hd_stretch_native ? ph : (int)(nh * sc);
   fill(px, py, pw, ph, 0);
   blit_fit(native, npitch, 0, 0, nw, nh, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
 }
