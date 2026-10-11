@@ -65,7 +65,7 @@ typedef struct {
   int nedge;                        /* floor/ceiling edges ($9D42/$9D4A list at $FF1182): corners in cells */
   struct { int8 x0, y0, x1, y1; uint8 flag; } edge[32];
   int npc;                          /* sprite pieces drawn by this tick's render ($EDA0 calls) */
-  struct { uint32 obj, data, shade, list, rec; int16 x, y, col, row, w, h, acol, arow, ascale; uint8 mirror, type, gr, gc; } pc[256];
+  struct { uint32 obj, data, shade, list, rec; int16 x, y, z, col, row, w, h, acol, arow, ascale; uint8 mirror, type, gr, gc; } pc[256];
                                     /* obj: anchor id; x, y: anchor (8.8); type: map item type (0 = object) */
   uint32 vbl;
   int valid;
@@ -74,7 +74,7 @@ typedef struct {
 static snap_t snaps[3];             /* [0] older, [1] newer, [2] being built */
 static int building;
 static uint32 anchor_id;            /* what the pieces being drawn belong to: object address or item cell */
-static int16 anchor_x, anchor_y;
+static int16 anchor_x, anchor_y, anchor_z;
 static int anchor_type;
 static int16 anchor_col, anchor_row, anchor_scale;   /* map item: the game's exact centre column, row, scale */
 static uint32 anchor_rec, anchor_pbase;              /* object sprite: sub-frame record and piece base ($1BCB4) */
@@ -160,7 +160,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   else if ((pc == 0x13360 || pc == 0x13388) && building)   /* object draw routine: a0 = object */
   {
     anchor_id = regs[8] & 0xFFFFFF; anchor_type = 0; anchor_rec = 0;
-    anchor_x = live_w(anchor_id + 0x20); anchor_y = live_w(anchor_id + 0x22);
+    anchor_x = live_w(anchor_id + 0x20); anchor_y = live_w(anchor_id + 0x22); anchor_z = live_w(anchor_id + 0x24);
   }
   else if (pc == 0x1BCB4 && building && anchor_id && !(anchor_id & 0x1000000))
   {
@@ -175,7 +175,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     int cx = (live_w(r + 2) + live_w(0xFF0E06)) & 31, cy = (live_w(r) + live_w(0xFF0E08)) & 31;   /* +0 dy, +2 dx */
     anchor_id = 0x1000000 | cy << 8 | cx;              /* items don't move: the cell is the id */
     anchor_rec = 0;
-    anchor_x = (cx << 8) + 0x80; anchor_y = (cy << 8) + 0x80;
+    anchor_x = (cx << 8) + 0x80; anchor_y = (cy << 8) + 0x80; anchor_z = 0;
     anchor_type = READ_BYTE(work_ram, (r + 5) & 0xFFFF);
     anchor_col = regs[1]; anchor_row = regs[2]; anchor_scale = regs[5];   /* d1, d2 ($113E8), d5 */
   }
@@ -209,7 +209,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
             r = c = 99;
           }
     }
-    s->pc[s->npc].obj = anchor_id; s->pc[s->npc].x = anchor_x; s->pc[s->npc].y = anchor_y;
+    s->pc[s->npc].obj = anchor_id; s->pc[s->npc].x = anchor_x; s->pc[s->npc].y = anchor_y; s->pc[s->npc].z = anchor_z;
     s->pc[s->npc].data = regs[9] & 0xFFFFFF; s->pc[s->npc].shade = shade;
     s->pc[s->npc].col = regs[1]; s->pc[s->npc].row = regs[2]; s->pc[s->npc].w = w; s->pc[s->npc].h = h;
     s->pc[s->npc].mirror = live_w(0xFF1088) != 0;
@@ -615,6 +615,21 @@ static void piece_pos(const snap_t *s, const snap_t *s0, int i, double t, double
     }
 }
 
+/* an object's height (+$24, negative = up): interpolated like its position (drips slide down walls) */
+static double piece_z(const snap_t *s, const snap_t *s0, int i, double t)
+{
+  int k;
+  double z = s->pc[i].z;
+  if (!s0->valid || t >= 1) return z;
+  for (k = 0; k < s0->npc; k++)
+    if (s0->pc[k].obj == s->pc[i].obj)
+    {
+      double z0 = s0->pc[k].z;
+      return fabs(z - z0) < 64 ? z0 + (z - z0) * t : z;
+    }
+  return z;
+}
+
 /* shade table for a piece drawn at native scale sc with shade list `list` (as the drawer at $EDD0); 0 = not drawn */
 static uint32 piece_shade(const snap_t *s, uint32 list, double sc)
 {
@@ -747,7 +762,21 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
       double x0 = R8(rec) == 1 ? -cols * pwu / 2 : R8(rec) ? -cols * pwu : 0;
       double y0 = R8(rec + 1) == 1 ? -rows * phu / 2 : R8(rec + 1) ? -rows * phu : 0;
       p->du = x0 + s->pc[i].gc * pwu; p->pw = pwu;
-      p->dv = -S16(s, s->pc[i].obj + 0x24) / 64.0 + y0 + s->pc[i].gr * phu; p->ph = phu;
+      p->dv = -piece_z(s, s0, i, t) / 64.0 + y0 + s->pc[i].gr * phu; p->ph = phu;
+    }
+    else if (!s->pc[i].type && !(s->pc[i].obj & 0x1000000) && M32(s, s->pc[i].obj + 0x0E) == 0x159FE)
+    {
+      /* blood drops ($159FE): state +$34, stretch k = +$35, scale s, rows from the object's row
+         ((horizon - bob - z) * s / 64 + 40). 0: droplet s/8 x s/4, centred, raised s/8; 1: splat
+         s*(256-k)/4096 wide, s*(256+k)/2048 tall, centred, hanging from the row; else s*(k+128)/1024 wide,
+         s*(256-k)/4096 tall, centred both ways. Exact instead of rounded; the height is interpolated. */
+      uint32 o = s->pc[i].obj;
+      int st = M8(s, o + 0x34), k = M8(s, o + 0x35);
+      double zz = -piece_z(s, s0, i, t) / 64.0;
+      if (st == 0)      { p->pw = 1 / 8.0; p->ph = 1 / 4.0; p->dv = zz - 1 / 8.0; }
+      else if (st == 1) { p->pw = (256 - k) / 4096.0; p->ph = (256 + k) / 2048.0; p->dv = zz; }
+      else              { p->pw = (k + 128) / 1024.0; p->ph = (256 - k) / 4096.0; p->dv = zz - p->ph / 2; }
+      p->du = -p->pw / 2;
     }
     p->data = s->pc[i].data; p->mirror = s->pc[i].mirror; p->shade = s->pc[i].shade; p->item = s->pc[i].type != 0;
     piece_pos(s, s0, i, t, &p->x, &p->y);
