@@ -1535,31 +1535,32 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
     }
   }
   /* compact HUD from the emulated screen, along the bottom: radar left, portrait right, and in the middle the
-     health box, the weapons bar and the armour box side by side, the boxes as tall as the bar; the
+     enemy counter, the weapons bar and the health counter side by side, the counters as tall as the bar; the
      player's weapon above the weapons bar */
   {
     double sc = zt_hd_ui_scale > 0 ? zt_hd_ui_scale : H / 360.0, k;
-    int m, rw2, rh2, pw2, ww, wh, bw, mid, by, cx;
+    int m, rw2, rh2, pw2, ww, wh, mid, by, cx;
     if (sc < 0.5) sc = 0.5;
     if (zt_hd_weapon) view_sprites(px, py, W, H, py + H - (int)(6 * sc) - (int)(36 * sc) - (int)(4 * sc), 3.2 * sc);
     m = (int)(6 * sc);
     rw2 = (int)(92 * sc); rh2 = (int)(92 * sc); pw2 = (int)(126 * sc);
-    /* middle group: box (28x18 scaled to the bar's 36 rows: 56 wide), gap, bar 240x36, gap, box */
+    /* middle group: counter (26x10 scaled to the bar's 36 rows: 94 wide), gap, bar 240x36, gap, counter (65) */
     k = sc;
     mid = W - rw2 - pw2 - 4 * m;                  /* room between radar and portrait */
-    if ((240 + 2 * 56) * k + 2 * m > mid) k = (mid - 2 * m) / (double)(240 + 2 * 56);
-    ww = (int)(240 * k); wh = (int)(36 * k); bw = (int)(56 * k);
+    if ((240 + 94 + 65) * k + 2 * m > mid) k = (mid - 2 * m) / (double)(240 + 94 + 65);
+    ww = (int)(240 * k); wh = (int)(36 * k);
     by = py + H - m - rh2;
     cx = px + W / 2;
     blit_fit(native, npitch, 100, 130, 92, 92, px + m, by, rw2, rh2);                                  /* radar */
     blit_fit(native, npitch, 192, 130, 126, 92, px + W - m - pw2, by, pw2, rh2);                       /* portrait */
     if (ww > 0)
     {
-      int wy = py + H - m - wh;
+      int wy = py + H - m - wh, lw = wh * 26 / 10, hw = wh * 18 / 10;
       blit_fit(native, npitch, 40, 0, 240, 36, cx - ww / 2, wy, ww, wh);                               /* weapons */
       ammo_counts(native, npitch, cx - ww / 2, wy, k);
-      blit_fit(native, npitch, 2, 66, 28, 18, cx - ww / 2 - m - bw, wy, bw, wh);                       /* health */
-      blit_fit(native, npitch, 290, 66, 28, 18, cx + (ww + 1) / 2 + m, wy, bw, wh);                    /* armour */
+      /* the counters' black insides only (digits on black, no frame), as tall as the bar */
+      blit_fit(native, npitch, 3, 71, 26, 10, cx - ww / 2 - m - lw, wy, lw, wh);                       /* enemies left */
+      blit_fit(native, npitch, 295, 71, 18, 10, cx + (ww + 1) / 2 + m, wy, hw, wh);                    /* health */
     }
   }
 }
