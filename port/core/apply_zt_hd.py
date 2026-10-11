@@ -28,7 +28,7 @@ patch("core/vdp_render.c", "static PIXEL_OUT_T pixel[0x100];",
 # 68k hooks (render start, sprite pieces and their anchors, edge pass, sprite projection, render end);
 # an older build's hook line is updated in place
 HOOK = ("    if (zt_hd_enabled && (REG_PC == 0xB9A6 || REG_PC == 0xEDA0 || REG_PC == 0x13360 || REG_PC == 0x13388 || "
-        "REG_PC == 0x113EE || REG_PC == 0x1BCB4 || REG_PC == 0x9D72 || REG_PC == 0x1329A || REG_PC == zt_hd_after_pc))\n")
+        "REG_PC == 0x113EE || REG_PC == 0x1BCB4 || REG_PC == 0x9D72 || REG_PC == 0x1329A || REG_PC == zt_hd_after_pc || REG_PC == zt_hd_after_init_pc))\n")
 _m = G / "core/m68k/m68kcpu.c"; _s = _m.read_text()
 _s = re.sub(r"    if \(zt_hd_enabled && \(REG_PC == 0xB9A6[^\n]*\n", lambda _: HOOK, _s)
 _m.write_text(_s)

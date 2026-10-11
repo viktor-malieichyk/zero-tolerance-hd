@@ -37,6 +37,7 @@ static int rw, rh;                  /* current render panel size */
 static int ow, oh;                  /* current output size */
 float zt_hd_fov = 106.0f;
 unsigned int zt_hd_after_pc = 0;
+unsigned int zt_hd_after_init_pc = 1;  /* end of the level-start render (1 = none: older ROM patch) */
 unsigned int zt_hd_dbg[8];
 unsigned char zt_hd_dbg_regs[0x20], zt_hd_dbg_bg[0xA0];
 double zt_hd_dbg_cam[8];
@@ -102,6 +103,9 @@ static int prepare_rom(void)
     free(rom_be); rom_be = NULL; return 0;          /* not the patched Zero Tolerance ROM */
   }
   zt_hd_after_pc = R32(ORG_TABLE + 52);
+  zt_hd_after_init_pc = R32(ORG_TABLE + 56);
+  if (zt_hd_after_init_pc < ORG_TABLE || zt_hd_after_init_pc >= ORG_TABLE + 0x10000 || (zt_hd_after_init_pc & 1))
+    zt_hd_after_init_pc = 1;                       /* older patch: the table ends at +52 */
   /* cell type handlers ($9226 dispatch table at $923A) */
   for (i = 0; i < 256; i++)
   {
@@ -224,6 +228,23 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     snaps[1] = *s;
     building = 0;
     zt_hd_dbg[3]++;
+  }
+  else if (pc == zt_hd_after_init_pc && building)     /* level-start render finished (the screen fades in) */
+  {
+    /* no tick has run yet, so ZT_CUR (the tick camera) is stale: use the game's camera, and no
+       interpolation (both snapshots the same) */
+    static const uint32 cam[4] = {0xFF0DEC, 0xFF0DEE, 0xFF0E04, 0xFF0E1A};
+    for (i = 0; i < 0x10000; i++) s->ram[i] = READ_BYTE(work_ram, i);
+    for (i = 0; i < 4; i++)
+    {
+      s->ram[(0x774C + i * 2) & 0xFFFF] = READ_BYTE(work_ram, cam[i] & 0xFFFF);
+      s->ram[(0x774D + i * 2) & 0xFFFF] = READ_BYTE(work_ram, (cam[i] + 1) & 0xFFFF);
+    }
+    s->vbl = M16(s, 0xFF0000);
+    s->valid = 1;
+    snaps[0] = *s;
+    snaps[1] = *s;
+    building = 0;
   }
 }
 
@@ -1311,11 +1332,29 @@ static void panel_native(const uint16 *native, int npitch, int nw, int nh, int p
   blit_fit(native, npitch, 0, 0, nw, nh, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
 }
 
+/* the gameplay screen is on: plane B holds the 3D view's tiles at their place (tile 1 at column 4, row 5,
+   then column-major: tile 2 below it, tile 11 to its right); no menu screen uses that layout */
+static int view_layout(void)
+{
+  uint32 base = (reg[4] & 7) << 13;
+  int pw = 32 << (reg[16] & 3);
+#define ENTRY(x, y) (((vram_b(base + ((y) * pw + (x)) * 2) << 8) | vram_b(base + ((y) * pw + (x)) * 2 + 1)) & 0x7FF)
+  return ENTRY(4, 5) == 1 && ENTRY(4, 6) == 2 && ENTRY(5, 5) == 11;
+#undef ENTRY
+}
+
 static int in_gameplay(void)
 {
+  uint32 age;
   if (!snaps[1].valid) { zt_hd_dbg[4]++; return 0; }
-  if (!live_w(0xFF7770)) { zt_hd_dbg[5]++; return 0; }                                     /* ZT_INGAME */
-  if (((live_w(0xFF0000) - snaps[1].vbl) & 0xFFFF) > 60) { zt_hd_dbg[6]++; return 0; }    /* no tick for a second */
+  age = (live_w(0xFF0000) - snaps[1].vbl) & 0xFFFF;
+  if (!live_w(0xFF7770))                                                                   /* ZT_INGAME */
+  {
+    /* not in play yet, but the level's first frame (snapshot from the level-start render) is fading
+       in: show it in HD already */
+    if (!view_layout() || age > 240) { zt_hd_dbg[5]++; return 0; }
+  }
+  else if (age > 60) { zt_hd_dbg[6]++; return 0; }                                         /* no tick for a second */
   zt_hd_dbg[7]++;
   return 1;
 }

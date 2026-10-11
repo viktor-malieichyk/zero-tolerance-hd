@@ -94,6 +94,7 @@ SNAP_ANG        equ 96              ; angle jump (per tick) treated as teleport
         bra.w   ZT_ExitCheck            ; +44
         bra.w   ZT_DeathExit            ; +48
         dc.l    ZT_AfterRender          ; +52 (data) end of the logic-tick render, for emulator hooks
+        dc.l    ZT_AfterInitRender      ; +56 (data) end of the level-start render (shown while the screen fades in)
 
 ; ---------------------------------------------------------------------------
 ; Hook at $162C (replaces "bsr $79A; bsr $D36"): run logic or render-only.
@@ -191,8 +192,11 @@ ZT_AfterRender:
 ; ---------------------------------------------------------------------------
 ZT_InitRender:
         clr.w   ZT_VALID(a6)
+        clr.w   ZT_RONLY(a6)            ; a full render (a stale flag would hide it from emulator hooks)
         move.w  CAM_A(a6),ZT_RA(a6)
-        jmp     RENDER
+        jsr     RENDER
+ZT_AfterInitRender:
+        rts
 
 ; ---------------------------------------------------------------------------
 ; Hook at $BAE6 inside RENDER (replaces "bsr CELL_LOGIC; move.w BOB(a6),d0"):
