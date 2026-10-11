@@ -75,27 +75,39 @@ def counter_tab(x, y, w, label, dbox, cut):
     paste_nat(dbox, ix + (iw - dw) // 2, iy + (ih - dh) // 2, 2)
 
 M = 4
-# ---- base rail joining the three modules
-plate(100, 340, 440, 16, (0, 0, 0, 0))
-d.line([(102, 347), (537, 347)], fill=SHADOW); d.line([(102, 348), (537, 348)], fill=EDGE)
+def black_row(x, y, w, h):
+    """black strip with a minimal plate border (2 px) around it"""
+    d.rectangle([x, y, x + w - 1, y + h - 1], fill=PLATE, outline=BLACK)
+    d.line([(x + 1, y + h - 2), (x + 1, y + 1), (x + w - 2, y + 1)], fill=EDGE)
+    d.rectangle([x + 2, y + 2, x + w - 3, y + h - 3], fill=BLACK)
 
-# ---- left: map, with the enemy counter on a tab above it, joined by the original's orange cable
-LX, LY, LW, LH = M, 252, 106, 104
-counter_tab(LX, LY - 40, 70, "ENEMIES", digits((3, 71, 29, 81)), (4, 8, 0, 0))
-plate(LX, LY, LW, LH, (0, 10, 0, 0))
-frame_in(LX + 7, LY + 7, 92, 92); paste_nat((100, 130, 192, 222), LX + 7, LY + 7)
-for cx in (LX + 4, LX + LW - 6): rivet(cx, LY + LH - 6)
-# cable: out of the tab's right side, along and down into the map frame's top
-for i, c in enumerate((RUST, ORANGE, ORANGE)):
-    d.line([(LX + 70, LY - 20 + i), (LX + 82 + i, LY - 20 + i), (LX + 82 + i, LY + 4)], fill=c)
-d.rectangle([LX + 80, LY + 2, LX + 87, LY + 5], fill=GREY, outline=BLACK)
+def digits2(dbox, x, cy):
+    """the counter's digits at 2x, vertically centred on cy"""
+    paste_nat(dbox, x, cy - (dbox[3] - dbox[1]), 2); return x + (dbox[2] - dbox[0]) * 2
 
-# ---- right: portrait card, with the health counter on a tab above it
-RW, RH = 142, 104; RX, RY = W - M - RW, 252
-counter_tab(RX + RW - 70, RY - 40, 70, "HEALTH", digits((295, 71, 313, 81)), (8, 4, 0, 0))
-plate(RX, RY, RW, RH, (10, 0, 0, 0))
-frame_in(RX + 8, RY + 7, 126, 92); paste_nat((192, 130, 318, 222), RX + 8, RY + 7)
-for cx in (RX + 4, RX + RW - 6): rivet(cx, RY + RH - 6)
+# ---- left: map, with "ENEMIES <count>" in one row on black right above it
+LX, LW, LH = M, 104, 104; LY = H - M - LH
+plate(LX, LY, LW, LH, (0, 8, 0, 0))
+frame_in(LX + 6, LY + 6, 92, 92); paste_nat((100, 130, 192, 222), LX + 6, LY + 6)
+for cx in (LX + 3, LX + LW - 5): rivet(cx, LY + LH - 5)
+ry = LY - 22
+black_row(LX, ry, LW, 22 + 1)
+eb = digits((3, 71, 29, 81))
+text(LX + 7, ry + 8, "ENEMIES", EDGE)
+digits2(eb, LX + LW - 7 - (eb[2] - eb[0]) * 2, ry + 12)
+
+# ---- right: the portrait alone (cut from the ID card), 1.5x, with "+ <health>" on black right next to it
+PW, PH = 72, 96                       # 48x64 game pixels at 1.5x (3x in the 1280x720 output)
+RW, RH = PW + 12, PH + 8; RX, RY = W - M - RW, H - M - RH
+plate(RX, RY, RW, RH, (8, 0, 0, 0))
+frame_in(RX + 6, RY + 4, PW, PH)
+for cx in (RX + 3, RX + RW - 5): rivet(cx, RY + RH - 5)
+hb = digits((295, 71, 313, 81)); hw = 4 + 14 + 5 + (hb[2] - hb[0]) * 2 + 6
+hx, hy = RX - hw + 1, RY + RH - 23
+black_row(hx, hy, hw, 23)
+px_, cy = hx + 5, hy + 11
+d.rectangle([px_ + 5, cy - 6, px_ + 8, cy + 6], fill=(232, 32, 32)); d.rectangle([px_, cy - 1, px_ + 13, cy + 2], fill=(232, 32, 32))
+digits2(hb, px_ + 14 + 5, cy + 1)
 
 # ---- middle: the weapons bar in a console with the original's chamfered top corners
 BW, BH = 240, 36; BX, BY = (W - BW) // 2, 318
@@ -114,6 +126,9 @@ for bx_ in (0, 46, 102, 158, 205):
         if x <= x1: d.rectangle([px0 + (x - x0) * g, py1 - (y1 + 1 - y) * g, px0 + (x - x0) * g + g - 1, py1 - (y1 - y) * g - 1], fill=YEL)
 
 big = hud.resize((W * 2, H * 2), Image.NEAREST)
+# the portrait at 3x on the output (1.5x the HUD's game pixels)
+por = nat.crop((196, 132, 244, 196)).resize((48 * 3, 64 * 3), Image.NEAREST)
+big.paste(por, ((RX + 6) * 2, (RY + 4) * 2))
 res = bg.copy(); res.paste(big, (0, 0), big)
 res.save(out)
 big.save(out.replace(".png", "_layer.png"))
