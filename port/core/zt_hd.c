@@ -12,6 +12,7 @@
 #include <math.h>
 #include "zt_hd.h"
 #include "zt_font.h"
+#include "zt_hud_font.h"
 #include <zlib.h>
 
 extern uint16 zt_vdp_pixel(int index);
@@ -1400,51 +1401,281 @@ static void view_sprites(int px, int py, int W, int H, int ybase, double g)
   }
 }
 
-/* The ammo count of each weapon box, drawn bigger over the box's bottom-left corner: the box's own yellow
-   text (native rows 29-35 of the bar, 5 px font) at up to 3x the bar's scale (within the box's width) on a
-   dark plate. Boxes start
-   at bar x 0, 46, 102, 158, 205 (the bar is native x 40-280, y 0-36), drawn at (bx, by) with scale k. */
-static void ammo_counts(const uint16 *native, int npitch, int bx, int by, double k)
+/* ---------------------------------------------------------------- HUD
+   Three console modules along the bottom, built from the original HUD's pieces (see port/design): left the
+   portrait (cut from the ID card) with "+ <health>" under it, middle the weapons bar, right "ENEMIES <count>"
+   over the map. Laid out in HUD units (game pixels at the HUD scale u, 360 units = the panel's height at the
+   default scale); every unit is drawn as a block of output pixels, like the original art. Ammo counts are
+   read from the weapon boxes and drawn in a finer font at the output's own resolution. */
+#define RGB565(r, g, b) (uint16)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
+enum { HC_BLACK, HC_PLATE, HC_SHADOW, HC_MID, HC_EDGE, HC_BRIGHT, HC_YELLOW, HC_RED };
+static const uint16 hud_col[] = {RGB565(0, 0, 0), RGB565(0, 68, 32), RGB565(0, 32, 32), RGB565(32, 100, 64),
+                                 RGB565(96, 136, 136), RGB565(168, 168, 200), RGB565(232, 236, 32), RGB565(232, 32, 32)};
+static struct { int px, py, W, H, cw, ch; double u; } hu;   /* panel, its size in units, the scale */
+
+static int hux(double x) { return hu.px + (int)floor(x * hu.u); }
+static int huy(double y) { return hu.py + hu.H - (int)floor((hu.ch - y) * hu.u); }   /* bottom-anchored */
+
+static void hud_rect(int x, int y, int w, int h, uint16 c)            /* units */
 {
-  static const int box_x[5] = {0, 46, 102, 158, 205};
-  int b, x, y;
-  double g = 2 * k;
-  int o = (int)(g / 3) > 1 ? (int)(g / 3) : 1;  /* outline width */
-  for (b = 0; b < 5; b++)
-  {
-    int tx0 = 40 + box_x[b] + 1, tw = 30, ty0 = 29, th = 7, minx = tw, maxy = -1;
-#define YELLOW(c) (((c) >> 11) >= 22 && (((c) >> 5) & 63) >= 44 && ((c) & 31) < 12)
-    for (y = 0; y < th; y++)
-      for (x = 0; x < tw; x++)
-        if (YELLOW(native[(ty0 + y) * npitch + tx0 + x])) { if (x < minx) minx = x; if (y > maxy) maxy = y; }
-    if (maxy < 0) continue;                      /* no count in this box */
+  int X0 = hux(x), X1 = hux(x + w), Y0 = huy(y), Y1 = huy(y + h), xx, yy;
+  if (X0 < hu.px) X0 = hu.px; if (X1 > hu.px + hu.W) X1 = hu.px + hu.W;
+  if (Y0 < hu.py) Y0 = hu.py; if (Y1 > hu.py + hu.H) Y1 = hu.py + hu.H;
+  for (yy = Y0; yy < Y1; yy++) for (xx = X0; xx < X1; xx++) hd[yy * ow + xx] = c;
+}
+static void hud_native(int sx, int sy, int sw, int sh, const uint16 *native, int npitch, double x, double y, double w, double h)
+{
+  blit_fit(native, npitch, sx, sy, sw, sh, hux(x), huy(y), hux(x + w) - hux(x), huy(y + h) - huy(y));
+}
+
+/* console plate: chamfered corners (top-left, top-right, bottom-right, bottom-left), black outline, light
+   bevel top and left, dark bottom and right, the original's dither on the face */
+static int plate_in(int i, int j, int w, int h, const int *cut)
+{
+  return i >= 0 && j >= 0 && i < w && j < h && i + j >= cut[0] && (w - 1 - i) + j >= cut[1] &&
+         (w - 1 - i) + (h - 1 - j) >= cut[2] && i + (h - 1 - j) >= cut[3];
+}
+static void hud_plate(int x, int y, int w, int h, int tl, int tr, int br, int bl)
+{
+  int cut[4] = {tl, tr, br, bl}, i, j, c;
+#define IN(a, b) plate_in(a, b, w, h, cut)
+#define EDGEPX(a, b) (IN(a, b) && (!IN((a) - 1, b) || !IN((a) + 1, b) || !IN(a, (b) - 1) || !IN(a, (b) + 1)))
+  for (j = 0; j < h; j++)
+    for (i = 0; i < w; i++)
     {
-      int maxx = minx, X0, Y0, X1, Y1, xx, yy;
-      double gb;
-      for (y = 0; y <= maxy; y++) for (x = minx; x < tw; x++) if (YELLOW(native[(ty0 + y) * npitch + tx0 + x]) && x > maxx) maxx = x;
-      gb = 3 * k;                                /* 3x the bar's scale, at most the box's width (33 native px) */
-      if ((maxx - minx + 1) * gb > 31 * k) gb = 31 * k / (maxx - minx + 1);
-      if (gb < g) gb = g;
-      /* dark plate: the text's box plus the outline, so the small count underneath doesn't show through */
-      X0 = bx + (int)((box_x[b] + 2) * k) - o; X1 = bx + (int)((box_x[b] + 2) * k + (maxx - minx + 1) * gb) + o;
-      Y1 = by + (int)(35 * k) + o;              Y0 = by + (int)(35 * k - (maxy + 1) * gb) - o;
-      for (yy = Y0 < 0 ? 0 : Y0; yy < Y1 && yy < oh; yy++)
-        for (xx = X0 < 0 ? 0 : X0; xx < X1 && xx < ow; xx++) hd[yy * ow + xx] = 0;
-      for (y = 0; y <= maxy; y++)
-        for (x = minx; x <= maxx; x++)
-        {
-          uint16 c = native[(ty0 + y) * npitch + tx0 + x];
-          if (!YELLOW(c)) continue;
-          /* the text's left edge 2 native px inside the box, its bottom on the box's bottom (bar row 35) */
-          X0 = bx + (int)((box_x[b] + 2) * k + (x - minx) * gb); X1 = bx + (int)((box_x[b] + 2) * k + (x - minx + 1) * gb);
-          Y1 = by + (int)(35 * k - (maxy - y) * gb);   Y0 = by + (int)(35 * k - (maxy - y + 1) * gb);
-          for (yy = Y0 < 0 ? 0 : Y0; yy < Y1 && yy < oh; yy++)
-            for (xx = X0 < 0 ? 0 : X0; xx < X1 && xx < ow; xx++) hd[yy * ow + xx] = c;
-        }
+      if (!IN(i, j)) continue;
+      if (EDGEPX(i, j)) c = HC_BLACK;
+      else if (EDGEPX(i - 1, j) || EDGEPX(i, j - 1) || EDGEPX(i - 1, j - 1)) c = HC_EDGE;
+      else if (EDGEPX(i + 1, j) || EDGEPX(i, j + 1) || EDGEPX(i + 1, j + 1)) c = HC_SHADOW;
+      else if (j >= 3 && j < h - 3 && !((j - 3) & 1) && i >= 3 && i < w - 3 && !((i - 3 - ((j >> 1) & 1) * 2) & 3)) c = HC_MID;
+      else c = HC_PLATE;
+      hud_rect(x + i, y + j, 1, 1, hud_col[c]);
     }
-#undef YELLOW
+#undef EDGEPX
+#undef IN
+}
+static void hud_rivet(int x, int y)
+{
+  hud_rect(x, y, 1, 1, hud_col[HC_BRIGHT]); hud_rect(x + 1, y, 1, 1, hud_col[HC_EDGE]);
+  hud_rect(x, y + 1, 1, 1, hud_col[HC_EDGE]); hud_rect(x + 1, y + 1, 1, 1, hud_col[HC_SHADOW]);
+}
+/* recessed window (2 units of rim) for content of w x h at (x, y): dark rim top and left, light bottom and right */
+static void hud_window(int x, int y, int w, int h)
+{
+  hud_rect(x - 2, y - 2, w + 4, h + 4, hud_col[HC_BLACK]);
+  hud_rect(x - 2, y + h + 1, w + 4, 1, hud_col[HC_EDGE]); hud_rect(x + w + 1, y - 2, 1, h + 4, hud_col[HC_EDGE]);
+  hud_rect(x - 2, y - 2, 1, h + 4, hud_col[HC_SHADOW]); hud_rect(x - 2, y - 2, w + 4, 1, hud_col[HC_SHADOW]);
+}
+/* 5x7 label font, the few letters needed */
+static void hud_text(int x, int y, const char *t, uint16 c)
+{
+  static const char *const letters = "EIMNS";
+  static const unsigned char glyph[5][7] = {
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F}, {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
+    {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}, {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}};
+  int r, k;
+  for (; *t; t++, x += 6)
+  {
+    const char *g = strchr(letters, *t);
+    if (!g) continue;
+    for (r = 0; r < 7; r++) for (k = 0; k < 5; k++) if (glyph[g - letters][r] & (0x10 >> k)) hud_rect(x + k, y + r, 1, 1, c);
   }
 }
+#define YELLOW(c) (((c) >> 11) >= 22 && (((c) >> 5) & 63) >= 44 && ((c) & 31) < 12)
+/* a counter's digits: the bounding box of the yellow pixels inside its black box; 0 if none */
+static int counter_box(const uint16 *native, int npitch, int x0, int y0, int w, int h, int *bb)
+{
+  int x, y;
+  bb[0] = x0 + w; bb[1] = y0 + h; bb[2] = -1; bb[3] = -1;
+  for (y = y0; y < y0 + h; y++)
+    for (x = x0; x < x0 + w; x++)
+      if (YELLOW(native[y * npitch + x]))
+      { if (x < bb[0]) bb[0] = x; if (y < bb[1]) bb[1] = y; if (x >= bb[2]) bb[2] = x + 1; if (y >= bb[3]) bb[3] = y + 1; }
+  return bb[2] > 0;
+}
+/* the counter's digits at 2x, left edge at x, vertically centred on cy; returns the width drawn */
+static int hud_counter(const uint16 *native, int npitch, int x0, int y0, int w, int h, int x, int cy, int right)
+{
+  int bb[4], dw, dh;
+  if (!counter_box(native, npitch, x0, y0, w, h, bb)) return 0;
+  dw = (bb[2] - bb[0]) * 2; dh = (bb[3] - bb[1]) * 2;
+  if (right) x -= dw;
+  hud_native(bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1], native, npitch, x, cy - dh / 2, dw, dh);
+  return dw;
+}
+
+/* A weapon box's ammo count as text: the game draws it with the 3x5 font at $15A072 (rows "676"/"7f7"...:
+   7 yellow, 6 orange, 4 dark) at the box's bottom left (bar rows 30-34), where some boxes have orange grid
+   lines too. Glyphs are found and told apart by their yellow pixels alone, which differ for every digit and
+   the % sign; every glyph has yellow in its middle column, so it starts at the first yellow column or the
+   one before (tried in that order, which never misreads). */
+static int ammo_ymask(const uint16 *native, int npitch, int x)
+{
+  int y, k, m = 0;
+  for (y = 0; y < 5; y++)
+    for (k = 0; k < 3; k++)
+      if (x + k >= 0 && x + k < 33 && YELLOW(native[(30 + y) * npitch + x + k])) m |= 0x4000 >> (y * 3 + k);
+  return m;
+}
+static int ammo_text(const uint16 *native, int npitch, int b, char *out, int *end)
+{
+  static const int box_x[5] = {0, 46, 102, 158, 205};
+  static const unsigned short ymask[11] = {0x2b6a, 0x2492, 0x22a7, 0x228a, 0x0bc9, 0x798a, 0x29aa, 0x7212, 0x2aaa, 0x2aca, 0x5085};
+  const uint16 *row = native + 40 + box_x[b] + 1;     /* the box's left edge; columns 0-32 */
+  int x = 0, n = 0, y, o, g;
+  while (n < 4)
+  {
+    for (; x < 30; x++) { for (y = 0; y < 5; y++) if (YELLOW(row[(30 + y) * npitch + x])) break; if (y < 5) break; }
+    if (x >= 30) break;
+    for (o = 0, g = 11; o < 2 && g == 11; o++)
+    {
+      int m = ammo_ymask(row, npitch, x - o);
+      for (g = 0; g < 11 && ymask[g] != m; g++) ;
+    }
+    if (g == 11) break;
+    out[n++] = "0123456789%"[g];
+    x += 4 - o;                                        /* past the glyph: start (x - (o - 1)) + 3 */
+  }
+  out[n] = 0;
+  *end = x;                                            /* the box column just past the last glyph */
+  return n;
+}
+/* text in the HUD font (Menlo Bold, zt_hud_font.h) at the largest size up to px, yellow on a black plate
+   reaching at least to xmin_end (to hide what it covers), bottom-left corner at (x, ybot) in output pixels */
+static void hud_font_text(const char *t, int x, int ybot, int px, int xmin_end)
+{
+  int s = 0, n = (int)strlen(t), i, gx, gy, w, h, X0, Y0;
+  while (s + 1 < ZT_HUD_FONT_SIZES && zt_hud_font_size[s + 1].px <= px) s++;
+  w = zt_hud_font_size[s].w; h = zt_hud_font_size[s].h;
+  X0 = x; Y0 = ybot - h - 4;
+  if (xmin_end < X0 + n * w + 4) xmin_end = X0 + n * w + 4;
+  for (gy = Y0; gy < ybot; gy++)
+    for (gx = X0; gx < xmin_end; gx++)
+      if (gx >= 0 && gx < ow && gy >= 0 && gy < oh) hd[gy * ow + gx] = 0;
+  for (i = 0; i < n; i++)
+  {
+    const char *pos = strchr("0123456789%", t[i]);
+    const unsigned char *gd;
+    int rb = (w + 1) / 2;
+    if (!pos) continue;
+    gd = zt_hud_font_data + zt_hud_font_size[s].off + (pos - "0123456789%") * rb * h;
+    for (gy = 0; gy < h; gy++)
+      for (gx = 0; gx < w; gx++)
+      {
+        int a = (gd[gy * rb + gx / 2] >> (gx & 1 ? 0 : 4)) & 15, xx = X0 + 2 + i * w + gx, yy = Y0 + 2 + gy;
+        if (!a || xx < 0 || xx >= ow || yy < 0 || yy >= oh) continue;
+        hd[yy * ow + xx] = RGB565(232 * a / 15, 236 * a / 15, 32 * a / 15);
+      }
+  }
+}
+
+/* the HUD's static parts (plates, windows, rivets, label) only change with the panel and the scale: drawn
+   once, kept as the output pixel spans each plate covers, and copied every frame */
+static struct { int px, py, W, H, ow; double u; int nspan; int *span; uint16 *pix; } hud_cache;
+
+typedef struct { int x, y, w, h, cut[4]; } hud_plate_t;
+static void hud_plate_span(const hud_plate_t *pl, int j, int *l, int *r)   /* unit row j: units [l, r) */
+{
+  int a = pl->cut[0] - j, b = pl->cut[3] - (pl->h - 1 - j), c = pl->cut[1] - j, d = pl->cut[2] - (pl->h - 1 - j);
+  *l = a > b ? a : b; if (*l < 0) *l = 0;
+  *r = c > d ? c : d; *r = pl->w - (*r < 0 ? 0 : *r);
+}
+
+static void draw_hud(const uint16 *native, int npitch, int px, int py, int W, int H)
+{
+  static const int box_x[5] = {0, 46, 102, 158, 205};
+  int b, LW, LH, LX, LY, RW, RH, RX, RY, BX, BY, hy, cw, cx, cy, i;
+  hud_plate_t pl[3];
+  hu.px = px; hu.py = py; hu.W = W; hu.H = H;
+  hu.u = zt_hd_ui_scale > 0 ? zt_hd_ui_scale : H / 360.0;
+  if (hu.u < 0.5) hu.u = 0.5;
+  if (W / hu.u < 460) hu.u = W / 460.0;                     /* the three modules side by side: 460 units */
+  hu.cw = (int)(W / hu.u); hu.ch = (int)(H / hu.u);
+  /* layout, in units: left portrait 48x64 at 1.25x with "+ <health>" under it; right "ENEMIES <count>" over the
+     map; middle the weapons bar */
+  LW = 60 + 12; LH = 6 + 80 + 5 + 20 + 6; LX = 4; LY = hu.ch - 4 - LH; hy = LY + 6 + 80 + 5;
+  RW = 104; RH = 6 + 18 + 5 + 92 + 6; RX = hu.cw - 4 - RW; RY = hu.ch - 4 - RH;
+  BX = (hu.cw - 240) / 2; BY = hu.ch - 6 - 36;
+  pl[0] = (hud_plate_t){LX, LY, LW, LH, {0, 8, 0, 0}};
+  pl[1] = (hud_plate_t){RX, RY, RW, RH, {8, 0, 0, 0}};
+  pl[2] = (hud_plate_t){BX - 10, BY - 6, 260, 50, {10, 10, 0, 0}};
+  if (hud_cache.pix && hud_cache.px == px && hud_cache.py == py && hud_cache.W == W && hud_cache.H == H &&
+      hud_cache.ow == ow && hud_cache.u == hu.u)
+  {
+    const uint16 *src = hud_cache.pix;
+    for (i = 0; i < hud_cache.nspan; i++)
+    {
+      int *sp = hud_cache.span + 3 * i, n = sp[2] - sp[1];
+      memcpy(hd + sp[0] * ow + sp[1], src, n * sizeof(uint16)); src += n;
+    }
+  }
+  else
+  {
+    int pass, nspan = 0, npix = 0, j, yy;
+    for (i = 0; i < 3; i++) hud_plate(pl[i].x, pl[i].y, pl[i].w, pl[i].h, pl[i].cut[0], pl[i].cut[1], pl[i].cut[2], pl[i].cut[3]);
+    hud_window(LX + 6, LY + 6, 60, 80); hud_window(LX + 6, hy, 60, 20);
+    hud_rivet(LX + 2, LY + LH - 4); hud_rivet(LX + LW - 4, LY + LH - 4);
+    hud_window(RX + 6, RY + 6, 92, 18); hud_window(RX + 6, RY + 29, 92, 92);
+    hud_text(RX + 9, RY + 12, "ENEMIES", hud_col[HC_EDGE]);
+    hud_rivet(RX + 2, RY + RH - 4); hud_rivet(RX + RW - 4, RY + RH - 4);
+    hud_window(BX, BY, 240, 36);
+    hud_rivet(BX - 7, BY + 39); hud_rivet(BX + 245, BY + 39);
+    /* keep it: count the spans, then copy them */
+    free(hud_cache.span); free(hud_cache.pix); hud_cache.span = NULL; hud_cache.pix = NULL;
+    for (pass = 0; pass < 2; pass++)
+    {
+      uint16 *dst = hud_cache.pix;
+      nspan = 0;
+      for (i = 0; i < 3; i++)
+        for (j = 0; j < pl[i].h; j++)
+        {
+          int l, r, X0, X1;
+          hud_plate_span(&pl[i], j, &l, &r);
+          X0 = hux(pl[i].x + l); X1 = hux(pl[i].x + r);
+          if (X0 < px) X0 = px; if (X1 > px + W) X1 = px + W;
+          if (X1 <= X0) continue;
+          for (yy = huy(pl[i].y + j); yy < huy(pl[i].y + j + 1); yy++)
+          {
+            if (yy < py || yy >= py + H) continue;
+            if (pass)
+            {
+              int *sp = hud_cache.span + 3 * nspan;
+              sp[0] = yy; sp[1] = X0; sp[2] = X1;
+              memcpy(dst, hd + yy * ow + X0, (X1 - X0) * sizeof(uint16)); dst += X1 - X0;
+            }
+            else npix += X1 - X0;
+            nspan++;
+          }
+        }
+      if (!pass)
+      {
+        hud_cache.span = malloc(3 * sizeof(int) * (nspan ? nspan : 1)); hud_cache.pix = malloc(sizeof(uint16) * (npix ? npix : 1));
+        if (!hud_cache.span || !hud_cache.pix) { free(hud_cache.span); free(hud_cache.pix); hud_cache.span = NULL; hud_cache.pix = NULL; break; }
+      }
+    }
+    hud_cache.nspan = nspan; hud_cache.px = px; hud_cache.py = py; hud_cache.W = W; hud_cache.H = H; hud_cache.ow = ow; hud_cache.u = hu.u;
+  }
+  /* what changes: the original's pieces, the counters, the ammo counts */
+  hud_native(196, 132, 48, 64, native, npitch, LX + 6, LY + 6, 60, 80);
+  {
+    int bb[4], dw = counter_box(native, npitch, 295, 71, 18, 10, bb) ? (bb[2] - bb[0]) * 2 : 0;
+    cw = 14 + 5 + dw; cx = LX + 6 + (60 - cw) / 2; cy = hy + 10;
+    hud_rect(LX + 6, hy, 60, 20, hud_col[HC_BLACK]);
+    hud_rect(cx + 5, cy - 6, 4, 13, hud_col[HC_RED]); hud_rect(cx, cy - 1, 14, 4, hud_col[HC_RED]);
+    hud_counter(native, npitch, 295, 71, 18, 10, cx + 19, cy + 1, 0);
+  }
+  hud_counter(native, npitch, 3, 71, 26, 10, RX + RW - 9, RY + 15, 1);
+  hud_native(100, 130, 92, 92, native, npitch, RX + 6, RY + 29, 92, 92);
+  hud_native(40, 0, 240, 36, native, npitch, BX, BY, 240, 36);
+  for (b = 0; b < 5; b++)
+  {
+    char t[8];
+    int end;
+    if (ammo_text(native, npitch, b, t, &end))
+      hud_font_text(t, hux(BX + box_x[b] + 1), huy(BY + 36), (int)(10 * hu.u), hux(BX + box_x[b] + 1 + end));
+  }
+}
+#undef YELLOW
 
 /* the HD 3D view plus compact HUD, rendered into a panel of the output */
 static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, int H)
@@ -1534,34 +1765,12 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
       free(colw);
     }
   }
-  /* compact HUD from the emulated screen, along the bottom: radar left, portrait right, and in the middle the
-     enemy counter, the weapons bar and the health counter side by side, the counters as tall as the bar; the
-     player's weapon above the weapons bar */
+  /* the player's weapon above the weapons bar, then the HUD */
   {
-    double sc = zt_hd_ui_scale > 0 ? zt_hd_ui_scale : H / 360.0, k;
-    int m, rw2, rh2, pw2, ww, wh, mid, by, cx;
+    double sc = zt_hd_ui_scale > 0 ? zt_hd_ui_scale : H / 360.0;
     if (sc < 0.5) sc = 0.5;
     if (zt_hd_weapon) view_sprites(px, py, W, H, py + H - (int)(6 * sc) - (int)(36 * sc) - (int)(4 * sc), 3.2 * sc);
-    m = (int)(6 * sc);
-    rw2 = (int)(92 * sc); rh2 = (int)(92 * sc); pw2 = (int)(126 * sc);
-    /* middle group: counter (26x10 scaled to the bar's 36 rows: 94 wide), gap, bar 240x36, gap, counter (65) */
-    k = sc;
-    mid = W - rw2 - pw2 - 4 * m;                  /* room between radar and portrait */
-    if ((240 + 94 + 65) * k + 2 * m > mid) k = (mid - 2 * m) / (double)(240 + 94 + 65);
-    ww = (int)(240 * k); wh = (int)(36 * k);
-    by = py + H - m - rh2;
-    cx = px + W / 2;
-    blit_fit(native, npitch, 100, 130, 92, 92, px + m, by, rw2, rh2);                                  /* radar */
-    blit_fit(native, npitch, 192, 130, 126, 92, px + W - m - pw2, by, pw2, rh2);                       /* portrait */
-    if (ww > 0)
-    {
-      int wy = py + H - m - wh, lw = wh * 26 / 10, hw = wh * 18 / 10;
-      blit_fit(native, npitch, 40, 0, 240, 36, cx - ww / 2, wy, ww, wh);                               /* weapons */
-      ammo_counts(native, npitch, cx - ww / 2, wy, k);
-      /* the counters' black insides only (digits on black, no frame), as tall as the bar */
-      blit_fit(native, npitch, 3, 71, 26, 10, cx - ww / 2 - m - lw, wy, lw, wh);                       /* enemies left */
-      blit_fit(native, npitch, 295, 71, 18, 10, cx + (ww + 1) / 2 + m, wy, hw, wh);                    /* health */
-    }
+    draw_hud(native, npitch, px, py, W, H);
   }
 }
 

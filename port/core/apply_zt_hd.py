@@ -20,6 +20,7 @@ def patch(path, old, new, count=1, done_if=None):
 shutil.copy(HERE / "zt_hd.c", G / "core" / "zt_hd.c")
 shutil.copy(HERE / "zt_hd.h", G / "core" / "zt_hd.h")
 shutil.copy(HERE / "zt_font.h", G / "core" / "zt_font.h")
+shutil.copy(HERE / "zt_hud_font.h", G / "core" / "zt_hud_font.h")
 
 # palette accessor
 patch("core/vdp_render.c", "static PIXEL_OUT_T pixel[0x100];",

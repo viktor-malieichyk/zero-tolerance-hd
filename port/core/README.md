@@ -21,9 +21,10 @@ draws those frames. Cost on Apple Silicon (native), emulation included: about 2.
 - `genesis_plus_gx_zt_hd`: enabled / disabled
 - `genesis_plus_gx_zt_hd_res`: 960x540 ... 2560x1440
 - `genesis_plus_gx_zt_hd_fov`: 90 (original) ... 120
-- `genesis_plus_gx_zt_hd_ui_scale`: `auto` (output height / 360) or 1 ... 4. The HUD sits along the bottom:
-  radar left, portrait right, and in the middle the health box, the weapons bar (with each weapon's ammo
-  count drawn larger) and the armour box.
+- `genesis_plus_gx_zt_hd_ui_scale`: `auto` (output height / 360) or 1 ... 4. The HUD is three console
+  modules along the bottom, built from the original HUD's pieces (design: `port/design`): left the portrait
+  with "+ health" under it, middle the weapons bar (ammo counts redrawn in Menlo Bold at the output
+  resolution, `zt_hud_font.h` from `make_hud_font.py`), right "ENEMIES <count>" over the map.
 - `genesis_plus_gx_zt_hd_layout`: `hd` (HD only), `side_by_side` (original left, HD right; 1920 -> 1920x540),
   `top_bottom` (original above HD; 1920 -> 960x1080), or `toggle` (switch between HD and original with a key)
 - `genesis_plus_gx_zt_hd_toggle_key`: switch key, default G
