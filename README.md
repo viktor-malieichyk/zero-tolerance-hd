@@ -57,9 +57,11 @@ On macOS, copy the core to `patch/tools/genesis_plus_gx_zt_hd.dylib` (Apple Sili
 `genesis_plus_gx_zt_hd_x86_64.dylib` (Intel RetroArch) and run `patch/play_mac.sh`.
 See `port/core/README.md` for the core options and the in-game menu.
 
-**Steam drop-in:** `python3 patch/make_patch.py --steam <Steam game folder>` for the patched
-`res/game`, then `sh port/core/steam/build_steam.sh <clean Genesis-Plus-GX checkout>` for `ew_core.dll`
-(32-bit, needs `i686-w64-mingw32-gcc`). See `patch/steam_hd/README.txt` for installing.
+**Steam drop-in:** `sh port/core/steam/build_steam.sh <clean Genesis-Plus-GX checkout> <Steam game folder>`
+builds `ew_core.dll` (32-bit, needs `i686-w64-mingw32-gcc`). It runs `make_patch.py --steam` and builds the
+resulting patch into the DLL, which applies it in memory to the game's own `res/game` (checked by CRC32),
+so the release package contains no ROM and installs by replacing `ew_core.dll` only. See
+`patch/steam_hd/README.txt`.
 
 **Sky panorama** (optional, for the planet levels): `port/core/make_sky.py` builds
 `zt_sky_1553E6.png` from a VRAM/CRAM dump of a level with that sky; put it next to the game or in
