@@ -85,29 +85,29 @@ def digits2(dbox, x, cy):
     """the counter's digits at 2x, vertically centred on cy"""
     paste_nat(dbox, x, cy - (dbox[3] - dbox[1]), 2); return x + (dbox[2] - dbox[0]) * 2
 
-# ---- left: map, with "ENEMIES <count>" in one row on black right above it
-LX, LW, LH = M, 104, 104; LY = H - M - LH
+# ---- left: the portrait alone (cut from the ID card), 1.25x, with "+ <health>" on black beneath it, one plate
+PW, PH = 60, 80                       # 48x64 game pixels at 1.25x (2.5x in the 1280x720 output)
+LW = PW + 12; LH = 6 + PH + 5 + 20 + 6; LX, LY = M, H - M - LH
 plate(LX, LY, LW, LH, (0, 8, 0, 0))
-frame_in(LX + 6, LY + 6, 92, 92); paste_nat((100, 130, 192, 222), LX + 6, LY + 6)
-for cx in (LX + 3, LX + LW - 5): rivet(cx, LY + LH - 5)
-ry = LY - 22
-black_row(LX, ry, LW, 22 + 1)
-eb = digits((3, 71, 29, 81))
-text(LX + 7, ry + 8, "ENEMIES", EDGE)
-digits2(eb, LX + LW - 7 - (eb[2] - eb[0]) * 2, ry + 12)
-
-# ---- right: the portrait alone (cut from the ID card), 1.5x, with "+ <health>" on black right next to it
-PW, PH = 72, 96                       # 48x64 game pixels at 1.5x (3x in the 1280x720 output)
-RW, RH = PW + 12, PH + 8; RX, RY = W - M - RW, H - M - RH
-plate(RX, RY, RW, RH, (8, 0, 0, 0))
-frame_in(RX + 6, RY + 4, PW, PH)
-for cx in (RX + 3, RX + RW - 5): rivet(cx, RY + RH - 5)
-hb = digits((295, 71, 313, 81)); hw = 4 + 14 + 5 + (hb[2] - hb[0]) * 2 + 6
-hx, hy = RX - hw + 1, RY + RH - 23
-black_row(hx, hy, hw, 23)
-px_, cy = hx + 5, hy + 11
+frame_in(LX + 6, LY + 6, PW, PH)
+hy = LY + 6 + PH + 5
+frame_in(LX + 6, hy, PW, 20)
+hb = digits((295, 71, 313, 81))
+cw = 14 + 5 + (hb[2] - hb[0]) * 2; px_, cy = LX + 6 + (PW - cw) // 2, hy + 10
 d.rectangle([px_ + 5, cy - 6, px_ + 8, cy + 6], fill=(232, 32, 32)); d.rectangle([px_, cy - 1, px_ + 13, cy + 2], fill=(232, 32, 32))
 digits2(hb, px_ + 14 + 5, cy + 1)
+for cx in (LX + 2, LX + LW - 4): rivet(cx, LY + LH - 4)
+
+# ---- right: "ENEMIES <count>" in one row on black and the map under it, in one plate
+RW = 104; RH = 6 + 18 + 5 + 92 + 6; RX, RY = W - M - RW, H - M - RH
+plate(RX, RY, RW, RH, (8, 0, 0, 0))
+frame_in(RX + 6, RY + 6, 92, 18)
+eb = digits((3, 71, 29, 81))
+text(RX + 9, RY + 12, "ENEMIES", EDGE)
+digits2(eb, RX + RW - 9 - (eb[2] - eb[0]) * 2, RY + 15)
+my = RY + 6 + 18 + 5
+frame_in(RX + 6, my, 92, 92); paste_nat((100, 130, 192, 222), RX + 6, my)
+for cx in (RX + 2, RX + RW - 4): rivet(cx, RY + RH - 4)
 
 # ---- middle: the weapons bar in a console with the original's chamfered top corners
 BW, BH = 240, 36; BX, BY = (W - BW) // 2, 318
@@ -126,9 +126,9 @@ for bx_ in (0, 46, 102, 158, 205):
         if x <= x1: d.rectangle([px0 + (x - x0) * g, py1 - (y1 + 1 - y) * g, px0 + (x - x0) * g + g - 1, py1 - (y1 - y) * g - 1], fill=YEL)
 
 big = hud.resize((W * 2, H * 2), Image.NEAREST)
-# the portrait at 3x on the output (1.5x the HUD's game pixels)
-por = nat.crop((196, 132, 244, 196)).resize((48 * 3, 64 * 3), Image.NEAREST)
-big.paste(por, ((RX + 6) * 2, (RY + 4) * 2))
+# the portrait at 2.5x on the output (1.25x the HUD's game pixels)
+por = nat.crop((196, 132, 244, 196)).resize((PW * 2, PH * 2), Image.NEAREST)
+big.paste(por, ((LX + 6) * 2, (LY + 6) * 2))
 res = bg.copy(); res.paste(big, (0, 0), big)
 res.save(out)
 big.save(out.replace(".png", "_layer.png"))
