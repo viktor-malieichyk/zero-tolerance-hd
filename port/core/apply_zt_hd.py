@@ -85,6 +85,9 @@ patch(L, '''  var.key = "genesis_plus_gx_no_sprite_limit";''', done_if='"genesis
     var.key = "genesis_plus_gx_zt_hd_weapon"; var.value = NULL;
     environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
     if (var.value) zt_hd_weapon = strcmp(var.value, "hidden") != 0;
+    var.key = "genesis_plus_gx_zt_hd_autoswitch"; var.value = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+    if (var.value) zt_hd_autoswitch = strcmp(var.value, "off") != 0;
     var.key = "genesis_plus_gx_zt_hd_sky"; var.value = NULL;
     environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
     if (var.value) zt_hd_sky_fill = !strcmp(var.value, "fill");
@@ -163,6 +166,19 @@ patch(L, '''   is_running = true;
 
 #ifdef HAVE_OVERCLOCK
   /* update overclock delay */''')
+
+patch(L, '''  if (libretro_supports_bitmasks)
+     osd_input_update_internal_bitmasks();
+  else
+     osd_input_update_internal();
+}''', '''  if (libretro_supports_bitmasks)
+     osd_input_update_internal_bitmasks();
+  else
+     osd_input_update_internal();
+
+  if (zt_hd_enabled)
+     zt_hd_pad(&input.pad[0]);          /* weapon auto-switch */
+}''')
 
 # core options
 O = "libretro/libretro_core_options.h"
@@ -264,6 +280,20 @@ if '"genesis_plus_gx_zt_hd_res",' not in (G / O).read_text(): patch(O, '''#ifdef
          { NULL, NULL },
       },
       "shown"
+   },
+   {
+      "genesis_plus_gx_zt_hd_autoswitch",
+      "Zero Tolerance HD Out of Ammo",
+      NULL,
+      "On: when the current weapon runs out of ammo, switch to the next weapon that has some (presses C for you). Off: the original (stay on the empty slot).",
+      NULL,
+      "hacks",
+      {
+         { "on",  "Switch weapon" },
+         { "off", "Keep (original)" },
+         { NULL, NULL },
+      },
+      "on"
    },
    {
       "genesis_plus_gx_zt_hd_sky",

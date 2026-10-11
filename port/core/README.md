@@ -25,6 +25,9 @@ draws those frames. Cost on Apple Silicon (native), emulation included: about 2.
   modules along the bottom, built from the original HUD's pieces (design: `port/design`): left the portrait
   with "+ health" under it, middle the weapons bar (ammo counts redrawn in Menlo Bold at the output
   resolution, `zt_hud_font.h` from `make_hud_font.py`), right "ENEMIES <count>" over the map.
+- `genesis_plus_gx_zt_hd_autoswitch`: `on` (default) or `off`. When the current weapon runs out of ammo, switch
+  to the best weapon left (a gun, then grenades or mines, then the fire extinguisher; the fists, the melee
+  weapon, last) by pressing C for you. Off: the original (you are left on the fists).
 - `genesis_plus_gx_zt_hd_layout`: `hd` (HD only), `side_by_side` (original left, HD right; 1920 -> 1920x540),
   `top_bottom` (original above HD; 1920 -> 960x1080), or `toggle` (switch between HD and original with a key)
 - `genesis_plus_gx_zt_hd_toggle_key`: switch key, default G

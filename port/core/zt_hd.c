@@ -22,6 +22,7 @@ int zt_hd_w = 1280, zt_hd_h = 720;
 int zt_hd_layout = 0;                /* 0 HD only, 1 side by side, 2 top/bottom, 3 switch with a key */
 float zt_hd_ui_scale = 0;            /* HUD scale; 0 = automatic (output height / 360) */
 int zt_hd_weapon = 1;                /* draw the player's weapon sprite in the HD view */
+int zt_hd_autoswitch = 1;            /* switch to the next weapon when the current one runs out of ammo */
 int zt_hd_smooth = 1;                /* shading dither: 1 blend each pixel pair's two colours, 0 draw the pattern */
 int zt_hd_stretch_native;            /* non-3D screens (title, menus, original view) fill their panel instead of keeping 320x224's shape */
 int zt_hd_sky_fill = 0;              /* scale the sky to fill the view height (aspect kept) */
@@ -1774,6 +1775,58 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
   }
 }
 
+/* ---------------------------------------------------------------- weapon auto-switch
+   The inventory: five 4-byte slots at $FF1036 (item type in the low byte of the first word, then ammo or
+   charge), the slot order at $FF104A (the current slot first; C rotates it by one slot, through every slot,
+   empty ones and the vest included). The item type picks the weapon through the table at $11C1C: mines,
+   fire extinguisher, grenade, handgun, laser gun, rocket launcher, shotgun, flamethrower, pulse laser; any
+   other item or an empty slot is weapon 0, the fists (melee, handler $11F3C). When a weapon's last shot is
+   fired the game empties its slot and leaves it selected: the player is on fists until pressing C onto a
+   weapon. With zt_hd_autoswitch this picks the best weapon left (a gun, then grenades or mines, then the
+   extinguisher, the fists last; the nearest in C's order within a kind) and presses C for the player (the
+   game's own switch, so its HUD and weapon sprite follow) until that slot is selected, holding and releasing
+   each press long enough for the 10 Hz logic to see it. Called once a frame with the pad's buttons. */
+static int weapon_rank(int type)
+{
+  switch (type)
+  {
+    case 0x08: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: return 3;   /* guns */
+    case 0x02: case 0x07: return 2;                                               /* mines, grenades */
+    case 0x04: return 1;                                                          /* fire extinguisher */
+    default: return 0;                                                            /* fists */
+  }
+}
+#define SLOT_TYPE(i) READ_BYTE(work_ram, 0x1037 + 4 * (i))
+void zt_hd_pad(unsigned short *pad)
+{
+  enum { HOLD = 8, GAP = 8 };
+  static int prev_type = -1, prev_slot = -1, target = -1, t, presses;
+  int slot = READ_BYTE(work_ram, 0x104A), type, i;
+  if (!zt_hd_autoswitch || !live_w(0xFF7770) || slot > 4) { target = -1; prev_slot = -1; return; }   /* ZT_INGAME */
+  type = SLOT_TYPE(slot);
+  if (target < 0 && slot == prev_slot && prev_type && !type)       /* the current weapon just ran out */
+  {
+    int best = 0;
+    for (i = 1; i < 5; i++)
+    {
+      int s = (slot + i) % 5, r = weapon_rank(SLOT_TYPE(s));
+      if (r > best) { best = r; target = s; }
+    }
+    t = 0; presses = 0;
+  }
+  if (target >= 0)
+  {
+    if (slot == target || presses >= 4 || weapon_rank(SLOT_TYPE(target)) == 0) target = -1;   /* there, or gone */
+    else
+    {
+      if (t < HOLD) *pad |= INPUT_C;
+      if (++t == HOLD + GAP) { t = 0; presses++; }
+    }
+  }
+  prev_type = type; prev_slot = slot;
+}
+#undef SLOT_TYPE
+
 /* ---------------------------------------------------------------- settings menu */
 typedef struct { const char *name; int count; const char *labels[12]; } menu_item_t;
 static const char *res_list[] = {"960x540", "1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
@@ -1782,7 +1835,7 @@ static const float hud_list[] = {0, 1, 1.5f, 2, 2.5f, 3, 4};
 static const unsigned key_codes[] = {'g', 'j', 'k', 'l', 'm', 'n', 't', 'u', 'y', 'b', 'v', 9, '`'};
 static const char *key_names[] = {"G", "J", "K", "L", "M", "N", "T", "U", "Y", "B", "V", "Tab", "`"};
 #define NKEYS 13
-enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_SKY, M_SKYEXT, M_SHADE, M_MENUKEY, M_COUNT };
+enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_MENUKEY, M_COUNT };
 static const char *layout_names[] = {"HD only", "Side by side", "Top / bottom", "Switch with key"};
 
 static int idx_of_res(void)
@@ -1805,6 +1858,7 @@ static void value_text(int item, char *b, int n)
     case M_TOGGLE: snprintf(b, n, "%s", key_names[idx_of_key(zt_hd_toggle_key)]); break;
     case M_HUD: if (zt_hd_ui_scale > 0) snprintf(b, n, "%gx", zt_hd_ui_scale); else snprintf(b, n, "Auto"); break;
     case M_WEAPON: snprintf(b, n, "%s", zt_hd_weapon ? "Shown" : "Hidden"); break;
+    case M_AUTOSW: snprintf(b, n, "%s", zt_hd_autoswitch ? "Switch weapon" : "Keep (original)"); break;
     case M_SKY: snprintf(b, n, "%s", zt_hd_sky_fill ? "Fill view height" : "Original band"); break;
     case M_SHADE: snprintf(b, n, "%s", zt_hd_smooth ? "Smooth" : "Dither (original)"); break;
     case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Stars, full planet" : zt_hd_sky_ext ? "Stars" : "Black"); break;
@@ -1812,15 +1866,15 @@ static void value_text(int item, char *b, int n)
   }
 }
 static const char *item_names[] = {"Resolution", "Field of view", "Original screen", "Switch key", "HUD scale",
-                                   "Weapon", "Sky", "Sky beyond band", "Shading", "Menu key"};
+                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Menu key"};
 
 void zt_hd_save_cfg(void)
 {
   FILE *f;
   if (!zt_hd_cfg_path[0] || !(f = fopen(zt_hd_cfg_path, "w"))) return;
-  fprintf(f, "res=%dx%d\nfov=%g\nlayout=%d\ntoggle_key=%u\nhud=%g\nweapon=%d\nsky_fill=%d\nsky_ext=%d\nsmooth=%d\nmenu_key=%u\n",
-          zt_hd_w, zt_hd_h, zt_hd_fov, zt_hd_layout, zt_hd_toggle_key, zt_hd_ui_scale, zt_hd_weapon, zt_hd_sky_fill,
-          zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key);
+  fprintf(f, "res=%dx%d\nfov=%g\nlayout=%d\ntoggle_key=%u\nhud=%g\nweapon=%d\nautoswitch=%d\nsky_fill=%d\nsky_ext=%d\nsmooth=%d\nmenu_key=%u\n",
+          zt_hd_w, zt_hd_h, zt_hd_fov, zt_hd_layout, zt_hd_toggle_key, zt_hd_ui_scale, zt_hd_weapon, zt_hd_autoswitch,
+          zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key);
   fclose(f);
 }
 
@@ -1837,6 +1891,7 @@ void zt_hd_load_cfg(void)
     else if (sscanf(line, "toggle_key=%u", &u) == 1) zt_hd_toggle_key = u;
     else if (sscanf(line, "hud=%f", &v) == 1) zt_hd_ui_scale = v;
     else if (sscanf(line, "weapon=%d", &a) == 1) zt_hd_weapon = a != 0;
+    else if (sscanf(line, "autoswitch=%d", &a) == 1) zt_hd_autoswitch = a != 0;
     else if (sscanf(line, "sky_fill=%d", &a) == 1) zt_hd_sky_fill = a != 0;
     else if (sscanf(line, "smooth=%d", &a) == 1) zt_hd_smooth = a != 0;
     else if (sscanf(line, "sky_ext=%d", &a) == 1) zt_hd_sky_ext = a < 0 ? 0 : a > 2 ? 2 : a;
@@ -1856,6 +1911,7 @@ static void menu_change(int item, int dir)
     case M_TOGGLE: zt_hd_toggle_key = key_codes[(idx_of_key(zt_hd_toggle_key) + dir + NKEYS) % NKEYS]; break;
     case M_HUD: zt_hd_ui_scale = hud_list[(idx_of_hud() + dir + 7) % 7]; break;
     case M_WEAPON: zt_hd_weapon = !zt_hd_weapon; break;
+    case M_AUTOSW: zt_hd_autoswitch = !zt_hd_autoswitch; break;
     case M_SKY: zt_hd_sky_fill = !zt_hd_sky_fill; break;
     case M_SHADE: zt_hd_smooth = !zt_hd_smooth; break;
     case M_SKYEXT: zt_hd_sky_ext = (zt_hd_sky_ext + dir + 3) % 3; planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0; break;
