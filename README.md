@@ -23,7 +23,8 @@ Steam release.
 |---|---|
 | `patch/zt_high_fps.asm`, `patch/make_patch.py` | the ROM patch (68000 assembly) and its builder (cartridge and Steam ROM) |
 | `patch/play_mac.sh`, `patch/tools/*.cfg` | macOS launcher and RetroArch settings |
-| `patch/windows/` | Windows launcher (`play_zt_hd.bat`) and settings for a RetroArch package |
+| `patch/windows/`, `patch/mac/` | Windows launcher (`play_zt_hd.bat`), READMEs and settings for the RetroArch packages |
+| `make_release.sh` | builds the release packages (Steam, Windows RetroArch, macOS RetroArch) into `release/` |
 | `patch/steam_hd/` | README and settings for the Steam drop-in package |
 | `port/core/zt_hd.c`, `zt_hd.h`, `zt_font.h` | the HD renderer |
 | `port/core/apply_zt_hd.py` | patches a Genesis Plus GX checkout (hooks, core options, video output, menu) |
@@ -62,6 +63,10 @@ builds `ew_core.dll` (32-bit, needs `i686-w64-mingw32-gcc`). It runs `make_patch
 resulting patch into the DLL, which applies it in memory to the game's own `res/game` (checked by CRC32),
 so the release package contains no ROM and installs by replacing `ew_core.dll` only. See
 `patch/steam_hd/README.txt`.
+
+**Release packages:** `sh make_release.sh <version> <Steam ew_core.dll> <Windows x64 core> <macOS arm64 core>
+<macOS x86_64 core>` (after `python3 patch/make_patch.py`). The RetroArch packages carry the patch as
+`Zero Tolerance (USA, Europe) (Rev A).ips`, which RetroArch applies to the user's ROM of that name as it loads it.
 
 **Sky panorama** (optional, for the planet levels): `port/core/make_sky.py` builds
 `zt_sky_1553E6.png` from a VRAM/CRAM dump of a level with that sky; put it next to the game or in

@@ -23,4 +23,12 @@ set "CFG=%HERE%zt-hd-retroarch.cfg"
 >>"%CFG%" echo video_window_custom_size_enable = "true"
 >>"%CFG%" echo video_window_width = "1280"
 >>"%CFG%" echo video_window_height = "720"
-start "" "%RA%" -L "%HERE%genesis_plus_gx_zt_hd_libretro.dll" --appendconfig "%HERE%zt-hd-retroarch.cfg" "%HERE%Zero Tolerance (high fps).gen"
+rem the game: your own ROM next to this file; RetroArch applies the .ips of the same name as it loads it
+set "ROM=%HERE%Zero Tolerance (USA, Europe) (Rev A).gen"
+if exist "%HERE%Zero Tolerance (high fps).gen" set "ROM=%HERE%Zero Tolerance (high fps).gen"
+if not exist "%ROM%" (
+  echo Put your copy of the game, named "Zero Tolerance (USA, Europe) (Rev A).gen", in this folder.
+  pause
+  exit /b 1
+)
+start "" "%RA%" -L "%HERE%genesis_plus_gx_zt_hd_libretro.dll" --appendconfig "%HERE%zt-hd-retroarch.cfg" "%ROM%"

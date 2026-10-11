@@ -2,7 +2,7 @@ Zero Tolerance HD for the Steam release (QUByte Classics)
 =========================================================
 
 A drop-in replacement for the game's emulator: Genesis Plus GX with the Zero Tolerance HD renderer
-(large 3D view at up to 4K, compact HUD, in-game settings) and the fixed-rate patch (smooth view,
+(large 3D view at up to 4K, a redesigned HUD built from the original's pieces, in-game settings) and the fixed-rate patch (smooth view,
 original game speed). No ROM is included and no game file is changed: the patch is applied in memory
 to the game's own res\game each time it starts.
 
@@ -18,15 +18,19 @@ Install
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, sky, sky beyond band, shading, menu key. Saved to zt_hd.cfg in the game folder.
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key.
+        Saved to zt_hd.cfg in the game folder.
   G     switch between the HD view and the original screen
+  When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
+  off with "Out of ammo" in the menu.
   The controller and keyboard buttons are the frontend's, as before.
 
 Notes
   - ew_core_options.cfg holds the starting settings; the menu's zt_hd.cfg overrides them.
   - The window takes its shape (16:9 by default) from the resolution and layout in ew_core_options.cfg.
-    The frontend's stretch mode fits the picture to the window's height only, so a window narrower than
-    16:9 (or a 16:10 screen) cuts the sides; its integer-scale mode letterboxes correctly.
+    The frontend's Stretch fits the picture to the window's height only, so a window narrower than 16:9
+    (or a 16:10 screen) cuts the sides; with Stretch off it letterboxes correctly. Stretch also stretches
+    the original 320x224 screens (title, menus, original view) to the full width.
   - Save states from the original emulator can't be loaded by this one.
   - The -turbo launch option isn't needed (and is ignored): the patched game keeps its normal speed.
   - If the game runs slowly, lower the resolution in the M menu (e.g. 1280x720).
