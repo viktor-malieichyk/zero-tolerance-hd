@@ -60,7 +60,7 @@ static void opts_load(void)
   char path[MAX_PATH + 32], line[256], k[64], v[64];
   FILE *f;
   opt_set("genesis_plus_gx_zt_hd", "enabled");
-  opt_set("genesis_plus_gx_zt_hd_res", "1920x1080");
+  opt_set("genesis_plus_gx_zt_hd_res", "1280x720");
   opt_set("genesis_plus_gx_zt_hd_fov", "106");
   opt_set("genesis_plus_gx_zt_hd_layout", "toggle");
   opt_set("genesis_plus_gx_zt_hd_toggle_key", "g");
@@ -83,14 +83,14 @@ static void opts_load(void)
    because the frontend sizes its window from the screen size right at startup */
 static void expected_output(int *w, int *h)
 {
-  int i, rw = 1920, rh = 1080, pw, ph, layout = 3;
+  int i, rw = 1280, rh = 720, pw, ph, layout = 3;
   for (i = 0; i < nopts; i++)
   {
     if (!strcmp(opts[i].key, "genesis_plus_gx_zt_hd_res")) sscanf(opts[i].val, "%dx%d", &rw, &rh);
     if (!strcmp(opts[i].key, "genesis_plus_gx_zt_hd_layout"))
       layout = !strcmp(opts[i].val, "side_by_side") ? 1 : !strcmp(opts[i].val, "top_bottom") ? 2 : !strcmp(opts[i].val, "toggle") ? 3 : 0;
   }
-  if (rw < 320 || rw > 7680 || rh < 224 || rh > 4320) { rw = 1920; rh = 1080; }
+  if (rw < 320 || rw > 7680 || rh < 224 || rh > 4320) { rw = 1280; rh = 720; }
   pw = rw / 2; ph = (pw * 9 / 16) & ~1;
   if (layout == 1) { *w = rw; *h = ph; }
   else if (layout == 2) { *w = pw; *h = 2 * ph; }

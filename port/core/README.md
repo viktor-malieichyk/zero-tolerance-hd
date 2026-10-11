@@ -75,7 +75,7 @@ Press the menu key (M). The game pauses. Up/Down select; Left/Right change resol
 switch key, HUD scale, weapon, sky and menu key. Changes apply immediately (including the output size) and
 are saved to `zt_hd.cfg` in RetroArch's save folder. That file overrides the core options on the next start.
 
-`patch/tools/retroarch-zt-hd.cfg` launches with HD on at 1920x1080:
+`patch/tools/retroarch-zt-hd.cfg` launches with HD on at 1280x720:
 
     open -a RetroArch --args -L <tools>/genesis_plus_gx_zt_hd_x86_64.dylib \
       --appendconfig <tools>/retroarch-zt-hd.cfg "<patch>/Zero Tolerance (high fps).gen"

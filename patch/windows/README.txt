@@ -7,7 +7,7 @@ Files
   zt_high_fps.ips                     the same patch as IPS, for "Zero Tolerance (USA, Europe) (Rev A).gen"
   zt_sky_1553E6.png                   full sky for the planet levels (complete planet, more stars);
                                       keep it next to the game (or in RetroArch's saves folder)
-  zt-hd-core-options.cfg              the core's settings (HD on, 1920x1080, FOV 106, ...)
+  zt-hd-core-options.cfg              the core's settings (HD on, 1280x720, FOV 106, ...)
   play_zt_hd.bat                      starts RetroArch with all of the above
 
 Use
