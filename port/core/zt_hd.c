@@ -65,7 +65,7 @@ typedef struct {
   int nedge;                        /* floor/ceiling edges ($9D42/$9D4A list at $FF1182): corners in cells */
   struct { int8 x0, y0, x1, y1; uint8 flag; } edge[32];
   int npc;                          /* sprite pieces drawn by this tick's render ($EDA0 calls) */
-  struct { uint32 obj, data, shade, list; int16 x, y, col, row, w, h, acol, arow, ascale; uint8 mirror, type; } pc[256];
+  struct { uint32 obj, data, shade, list, rec; int16 x, y, col, row, w, h, acol, arow, ascale; uint8 mirror, type, gr, gc; } pc[256];
                                     /* obj: anchor id; x, y: anchor (8.8); type: map item type (0 = object) */
   uint32 vbl;
   int valid;
@@ -77,6 +77,8 @@ static uint32 anchor_id;            /* what the pieces being drawn belong to: ob
 static int16 anchor_x, anchor_y;
 static int anchor_type;
 static int16 anchor_col, anchor_row, anchor_scale;   /* map item: the game's exact centre column, row, scale */
+static uint32 anchor_rec, anchor_pbase;              /* object sprite: sub-frame record and piece base ($1BCB4) */
+static uint16 anchor_used;                           /* grid cells of the record already matched to pieces */
 
 static inline uint32 M8(const snap_t *s, uint32 a) { return s->ram[a & 0xFFFF]; }
 static inline uint32 M16(const snap_t *s, uint32 a) { return (M8(s, a) << 8) | M8(s, a + 1); }
@@ -157,14 +159,22 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     s->hor_spr = (int16)live_w(0xFF0E1A);
   else if ((pc == 0x13360 || pc == 0x13388) && building)   /* object draw routine: a0 = object */
   {
-    anchor_id = regs[8] & 0xFFFFFF; anchor_type = 0;
+    anchor_id = regs[8] & 0xFFFFFF; anchor_type = 0; anchor_rec = 0;
     anchor_x = live_w(anchor_id + 0x20); anchor_y = live_w(anchor_id + 0x22);
+  }
+  else if (pc == 0x1BCB4 && building && anchor_id && !(anchor_id & 0x1000000))
+  {
+    /* object sprite routine: a1 = sub-frame record (+0/+1 x/y anchor, +2/+3 piece width/height factors,
+       +4/+5 grid columns/rows, +6 attributes, +$16 piece ids), a2 = piece base. Its pieces' layout is
+       computed exactly from the record instead of from the rounded rectangles */
+    anchor_rec = regs[9] & 0xFFFFFF; anchor_pbase = regs[10] & 0xFFFFFF; anchor_used = 0;
   }
   else if (pc == 0x113EE && building)                 /* map item (pickup): a3 = record (cell relative to $FF0E06/08) */
   {
     uint32 r = regs[11] & 0xFFFFFF;
     int cx = (live_w(r + 2) + live_w(0xFF0E06)) & 31, cy = (live_w(r) + live_w(0xFF0E08)) & 31;   /* +0 dy, +2 dx */
     anchor_id = 0x1000000 | cy << 8 | cx;              /* items don't move: the cell is the id */
+    anchor_rec = 0;
     anchor_x = (cx << 8) + 0x80; anchor_y = (cy << 8) + 0x80;
     anchor_type = READ_BYTE(work_ram, (r + 5) & 0xFFFF);
     anchor_col = regs[1]; anchor_row = regs[2]; anchor_scale = regs[5];   /* d1, d2 ($113E8), d5 */
@@ -185,6 +195,20 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     }
     s->pc[s->npc].type = anchor_type; s->pc[s->npc].list = list;
     s->pc[s->npc].acol = anchor_col; s->pc[s->npc].arow = anchor_row; s->pc[s->npc].ascale = anchor_scale;
+    s->pc[s->npc].rec = 0;
+    if (anchor_rec)                                    /* which grid cell of the record this piece is */
+    {
+      uint32 pid = ((regs[9] & 0xFFFFFF) - anchor_pbase) >> 9;
+      int cols = R8(anchor_rec + 4), rows = R8(anchor_rec + 5), r, c;
+      for (r = 0; r < rows && r < 4; r++)
+        for (c = 0; c < cols && c < 4; c++)
+          if (!(anchor_used & (1 << (r * 4 + c))) && R8(anchor_rec + 0x16 + r * 4 + c) == pid)
+          {
+            anchor_used |= 1 << (r * 4 + c);
+            s->pc[s->npc].rec = anchor_rec; s->pc[s->npc].gr = r; s->pc[s->npc].gc = c;
+            r = c = 99;
+          }
+    }
     s->pc[s->npc].obj = anchor_id; s->pc[s->npc].x = anchor_x; s->pc[s->npc].y = anchor_y;
     s->pc[s->npc].data = regs[9] & 0xFFFFFF; s->pc[s->npc].shade = shade;
     s->pc[s->npc].col = regs[1]; s->pc[s->npc].row = regs[2]; s->pc[s->npc].w = w; s->pc[s->npc].h = h;
@@ -606,6 +630,7 @@ static uint32 piece_shade(const snap_t *s, uint32 list, double sc)
    and rows at scale 1), 16x32 texels */
 typedef struct { double x, y, depth, du, dv, pw, ph; uint32 data, shade; int mirror, item; } dpiece_t;
 double zt_hd_dbg_piece[8];          /* debug: first map item piece drawn this frame */
+double zt_hd_dbg_obj[8];            /* debug: first object piece drawn this frame */
 
 /* map items the game didn't list this tick (outside its 90 degree cast at a wider HD FOV) are drawn with
    the last pieces seen for their type */
@@ -653,6 +678,11 @@ static void draw_piece(const dpiece_t *p, const cam_t *c, int W, int H, double f
   xc = W / 2.0 + focal * lat / p->depth;
   yc = H / 2.0 + (c->hor - bob) * sc / 64 * focal / 128;
   ax = xc + p->du * kx; ay = yc + p->dv * ky; pw = p->pw * kx; ph = p->ph * ky;
+  if (!p->item && zt_hd_dbg_obj[7] == 0)
+  {
+    zt_hd_dbg_obj[0] = p->x; zt_hd_dbg_obj[1] = p->y; zt_hd_dbg_obj[2] = ax; zt_hd_dbg_obj[3] = pw;
+    zt_hd_dbg_obj[4] = p->du; zt_hd_dbg_obj[5] = p->pw; zt_hd_dbg_obj[6] = p->depth; zt_hd_dbg_obj[7] = 1;
+  }
   if (p->item && zt_hd_dbg_piece[7] == 0)
   {
     zt_hd_dbg_piece[0] = p->du; zt_hd_dbg_piece[1] = p->dv; zt_hd_dbg_piece[2] = p->pw; zt_hd_dbg_piece[3] = p->ph;
@@ -693,7 +723,7 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
   uint32 mapp = M32(s, 0xFF1024);
   int i, j, n = 0, rad = M16(s, 0xFF0EB4), mx, my, cx = (int)floor(c->px), cy = (int)floor(c->py);
   make_cam(&nc, 1);                                   /* the camera the game rendered this tick with */
-  zt_hd_dbg_piece[7] = 0;
+  zt_hd_dbg_piece[7] = 0; zt_hd_dbg_obj[7] = 0;
   for (i = 0; i < s->npc; i++)
   {
     double ox, oy, nd, nl, nsc, ccol, row0;
@@ -706,6 +736,19 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
     ccol = 64 + 64 * nl / nd; row0 = 40 + (nhor - bob) * nsc / 64;
     p->du = (s->pc[i].col - ccol) / nsc; p->dv = (s->pc[i].row - row0) / nsc;
     p->pw = s->pc[i].w / nsc; p->ph = s->pc[i].h / nsc;
+    if (s->pc[i].rec)
+    {
+      /* exact layout from the sub-frame record ($1BCB4): piece width factor*scale/32 columns, height
+         factor*scale/16 rows, the grid anchored at the object's centre column and its row
+         ((horizon - bob - z) * scale / 64 + 40) by +0/+1 (0 left/top, 1 centre, 2 right/bottom) */
+      uint32 rec = s->pc[i].rec;
+      double pwu = R8(rec + 2) / 32.0, phu = R8(rec + 3) / 16.0;
+      int cols = R8(rec + 4), rows = R8(rec + 5);
+      double x0 = R8(rec) == 1 ? -cols * pwu / 2 : R8(rec) ? -cols * pwu : 0;
+      double y0 = R8(rec + 1) == 1 ? -rows * phu / 2 : R8(rec + 1) ? -rows * phu : 0;
+      p->du = x0 + s->pc[i].gc * pwu; p->pw = pwu;
+      p->dv = -S16(s, s->pc[i].obj + 0x24) / 64.0 + y0 + s->pc[i].gr * phu; p->ph = phu;
+    }
     p->data = s->pc[i].data; p->mirror = s->pc[i].mirror; p->shade = s->pc[i].shade; p->item = s->pc[i].type != 0;
     piece_pos(s, s0, i, t, &p->x, &p->y);
     p->depth = (p->x - c->px) * c->dx + (p->y - c->py) * c->dy;
