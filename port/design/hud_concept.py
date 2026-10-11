@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # usage: hud_concept.py <native 320x224 gameplay screenshot> <1280x720 HD frame without HUD> <out.png>
+# the ammo digit templates are learnt from nat_blood_user.png and native.png next to this script
 """HUD concept: the original HUD's own pieces (map, weapons bar, portrait card, the two counters cut down to
 their digits) in three new console modules drawn in the original console's palette. Drawn on a 640x360
 canvas in game pixels, shown 2x over a 1280x720 HD frame."""
@@ -114,21 +115,48 @@ BW, BH = 240, 36; BX, BY = (W - BW) // 2, 318
 plate(BX - 10, BY - 6, BW + 20, BH + 12 + 2, (10, 10, 0, 0))
 frame_in(BX, BY, BW, BH); paste_nat((40, 0, 280, 36), BX, BY)
 for cx in (BX - 7, BX + BW + 5): rivet(cx, BY + BH + 3)
-# bigger ammo counts over each slot's bottom-left (as the HD renderer draws them: 3x on a black plate)
+# ammo counts: read from the game's small digits (bottom-left of each slot), drawn after the 2x upscale in a
+# finer font at the output's own resolution (Menlo Bold, as the HD menu), on a small black plate
+def ammo_glyphs(bx_):
+    tx0, cols = 40 + bx_ + 1, []
+    for x in range(30):
+        cols.append("".join("#" if (lambda p: p[0] > 176 and p[1] > 176 and p[2] < 96)(nat.getpixel((tx0 + x, 29 + y))) else "." for y in range(7)))
+    gl, cur = [], []
+    for c in cols:
+        if "#" in c: cur.append(c)
+        elif cur: gl.append(tuple(cur)); cur = []
+    if cur: gl.append(tuple(cur))
+    return gl
+# templates: glyphs seen in two known frames (blood_user: 6 / 80% / 6, user_raw: 6 / 100%)
+TEMPL = {}
+def learn(path, slots):
+    global nat
+    keep = nat; nat = Image.open(path).convert("RGB")
+    for bx_, txt in slots:
+        for g, ch in zip(ammo_glyphs(bx_), txt): TEMPL[g] = ch
+    nat = keep
+import os
+HERE = os.path.dirname(os.path.abspath(__file__))
+learn(os.path.join(HERE, "nat_blood_user.png"), [(0, "6"), (46, "80%"), (102, "6")])
+learn(os.path.join(HERE, "native.png"), [(102, "6"), (158, "100%")])
+ammo = []
 for bx_ in (0, 46, 102, 158, 205):
-    tx0, ty0 = 40 + bx_ + 1, 29
-    pts = [(x, y) for y in range(7) for x in range(30) if (lambda p: p[0] > 176 and p[1] > 176 and p[2] < 96)(nat.getpixel((tx0 + x, ty0 + y)))]
-    if not pts: continue
-    x0 = min(p[0] for p in pts); x1 = max(p[0] for p in pts); y1 = max(p[1] for p in pts)
-    g = 3; px0 = BX + bx_ + 2; py1 = BY + 35
-    d.rectangle([px0 - 1, py1 - (y1 + 1) * g - 1, px0 + (x1 - x0 + 1) * g, py1], fill=BLACK)
-    for x, y in pts:
-        if x <= x1: d.rectangle([px0 + (x - x0) * g, py1 - (y1 + 1 - y) * g, px0 + (x - x0) * g + g - 1, py1 - (y1 - y) * g - 1], fill=YEL)
+    gl = ammo_glyphs(bx_)
+    if gl: ammo.append((bx_, "".join(TEMPL.get(g, "?") for g in gl)))
+print("ammo", ammo)
 
 big = hud.resize((W * 2, H * 2), Image.NEAREST)
 # the portrait at 2.5x on the output (1.25x the HUD's game pixels)
 por = nat.crop((196, 132, 244, 196)).resize((PW * 2, PH * 2), Image.NEAREST)
 big.paste(por, ((LX + 6) * 2, (LY + 6) * 2))
+from PIL import ImageFont
+font = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 20, index=1)
+bd = ImageDraw.Draw(big)
+for bx_, txt in ammo:
+    l, t, r, b_ = bd.textbbox((0, 0), txt, font=font)
+    x0, y1 = (BX + bx_ + 1) * 2, (BY + 36) * 2           # slot's bottom-left corner on the output
+    bd.rectangle([x0, y1 - (b_ - t) - 4, x0 + (r - l) + 3, y1 - 1], fill=BLACK)
+    bd.text((x0 + 2 - l, y1 - 2 - b_), txt, font=font, fill=YEL)
 res = bg.copy(); res.paste(big, (0, 0), big)
 res.save(out)
 big.save(out.replace(".png", "_layer.png"))
