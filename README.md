@@ -73,7 +73,7 @@ level 1, so their rendering is implemented from the game's code but not compared
 
 ## Credits and licences
 
-Zero Tolerance is © 1994 Technopop / Accolade; the Steam release is by QUByte Interactive. This
+The code in this repository is under the MIT licence (`LICENSE`). Zero Tolerance is © 1994 Technopop / Accolade; the Steam release is by QUByte Interactive. This
 project contains no part of the game. Genesis Plus GX is by Eke-Eke and contributors under its own
 non-commercial licence, which also applies to cores built from it. The menu font in `zt_font.h` is
 rendered from Menlo (Bitstream Vera licence).
