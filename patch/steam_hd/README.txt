@@ -28,6 +28,14 @@ In game
   off with "Out of ammo" in the menu.
   The controller and keyboard buttons are the frontend's, as before.
 
+The frontend's own menu (display, Set input, ...)
+  Opens with the right mouse button, or the right stick click on the controller (this package moves it
+  there from the Guide button, which Steam's overlay usually takes). To use another controller button, set
+  zt_frontend_menu_button in ew_core_options.cfg to its SDL joystick number (Xbox-style pad: 0 A, 1 B, 2 X,
+  3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 left stick click, 9 right stick click, 10 Guide). Back (6) is the HD
+  menu's button by default, so pick another one.
+  Frontend keys: F1-F3 load state 1-3, Shift+F1-F3 save, Alt+Enter fullscreen, Pause pauses.
+
 Notes
   - ew_core_options.cfg holds the starting settings; the menu's zt_hd.cfg overrides them.
   - The window takes its shape (16:9 by default) from the resolution and layout in ew_core_options.cfg.

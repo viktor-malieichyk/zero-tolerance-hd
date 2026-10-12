@@ -248,10 +248,35 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
   return TRUE;
 }
 
+/* The frontend's own menu (settings, Set input, ...) opens with the right mouse button or a controller
+   button: its joystick poll ($432D30) returns "menu" when the first pressed button is 10 (SDL's Guide on an
+   XInput pad; only with its "guide" setting on), compared as an immediate byte in "cmp esi, 0Ah" at $432D84.
+   That byte is set here from the option zt_frontend_menu_button (SDL joystick button number; default 9, the
+   right stick click on an Xbox-style pad, since Guide is usually taken by Steam's overlay; 10 = Guide as
+   originally), in memory only, after checking the instruction is where expected. */
+static void frontend_menu_button(void)
+{
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *p;
+  int i, b = 9;
+  DWORD old;
+  for (i = 0; i < nopts; i++) if (!strcmp(opts[i].key, "zt_frontend_menu_button")) b = atoi(opts[i].val);
+  if (!base || b < 0 || b > 31 || memcmp(base + 0x5C7D8, "stretch", 8)) return;
+  p = base + 0x32D84;
+  if (p[0] != 0x83 || p[1] != 0xFE || p[3] != 0x75) return;
+  if (p[2] == b) return;
+  if (VirtualProtect(p + 2, 1, PAGE_EXECUTE_READWRITE, &old))
+  {
+    p[2] = (unsigned char)b;
+    VirtualProtect(p + 2, 1, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p + 2, 1);
+  }
+}
+
 API bool ew_core_init(int sample_rate, unsigned int options)
 {
   (void)sample_rate; (void)options;           /* the core outputs 44100 Hz, which is what the frontend asks for */
   opts_load();
+  frontend_menu_button();
   expected_output(&fw, &fh);                   /* the window is sized from this before any frame exists */
   retro_set_environment(env_cb);
   retro_set_video_refresh(video_cb);
