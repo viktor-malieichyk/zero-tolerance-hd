@@ -363,16 +363,16 @@ patch(O, """      "original"
       "genesis_plus_gx_zt_hd_sky_ext",
       "Zero Tolerance HD Sky Beyond Band",
       NULL,
-      "The original sky art is an 80-row band. Above and below it: the level's own stars repeated (planet columns skipped), optionally with the planet completed where the art cuts it off, or black.",
+      "The original sky art is a band of rows. Enhanced: the level's improved sky (a redrawn panorama PNG when there is one, else the art extended and completed, e.g. the planet the art cuts off). Stars: the level's own stars repeated above and below the band. Black: nothing beyond the band.",
       NULL,
       "hacks",
       {
-         { "full_planet", "Stars, full planet" },
+         { "enhanced", "Enhanced" },
          { "stars",       "Stars" },
          { "black",       "Black" },
          { NULL, NULL },
       },
-      "full_planet"
+      "enhanced"
    },""")
 # shading dither option (separate, like the sky one)
 patch(L, """    if (var.value) zt_hd_sky_ext = !strcmp(var.value, "black") ? 0 : !strcmp(var.value, "stars") ? 1 : 2;""",
@@ -380,8 +380,8 @@ patch(L, """    if (var.value) zt_hd_sky_ext = !strcmp(var.value, "black") ? 0 :
     var.key = "genesis_plus_gx_zt_hd_shading"; var.value = NULL;
     environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
     if (var.value) zt_hd_smooth = strcmp(var.value, "dither") != 0;""")
-patch(O, """      "full_planet"
-   },""", """      "full_planet"
+patch(O, """      "enhanced"
+   },""", """      "enhanced"
    },
    {
       "genesis_plus_gx_zt_hd_shading",

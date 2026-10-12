@@ -36,9 +36,11 @@ draws those frames. Cost on Apple Silicon (native), emulation included: about 2.
 - `genesis_plus_gx_zt_hd_sky`: `original` (star band at its size) or `fill` (scaled uniformly to fill the view
   height; the planet stays round; one seam at a fixed direction since the panorama no longer divides 360 deg)
 
-- `genesis_plus_gx_zt_hd_sky_ext`: `full_planet` (default), `stars` or `black`. The original sky art is an
-  80-row band. `stars` repeats the level's own band above and below it (shifted sideways per repeat, star
-  columns only, so the planet isn't copied). `full_planet` also completes the planet the art cuts off: a
+- `genesis_plus_gx_zt_hd_sky_ext`: `enhanced` (default), `stars` or `black`.
+  The original sky art is a band of rows. `stars` repeats the level's own band above and below it (shifted
+  sideways per repeat, star columns only, so the planet isn't copied). `enhanced` shows the level's improved
+  sky: its panorama PNG when there is one (below), otherwise the stars plus whatever the art cuts off
+  completed; for the planet sky that is the planet: a
   circle is fitted to its visible rim and the missing top is the reflection of the lower part about the
   centre row (same limb shading), blended to the art's brightness at the cut. Built from the level's own
   tiles once the planet has been on screen.
@@ -54,7 +56,7 @@ gradient's two-colour bytes are treated the same way.
 ## Sky panorama PNG
 
 The game streams each sky from a 128 x 16 tile map (pointer at `$FF271E`: `$153106`, or `$1553E6` for the
-planet sky). The HD sky reads that map whole. With "Sky beyond band: Stars, full planet", the core uses
+planet sky). The HD sky reads that map whole. With "Sky beyond band: Enhanced", the core uses
 `zt_sky_<map address>.png` from the saves folder (next to `zt_hd.cfg`) when it exists:
 
     python3 make_sky.py <rom> <dump> 1553E6 zt_sky_1553E6.png

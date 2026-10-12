@@ -27,7 +27,8 @@ int zt_hd_smooth = 1;                /* shading dither: 1 blend each pixel pair'
 int zt_hd_stretch_native;            /* non-3D screens (title, menus, original view) fill their panel instead of keeping 320x224's shape */
 int zt_hd_sky_fill = 0;              /* scale the sky to fill the view height (aspect kept) */
 int zt_hd_sky_ext = 2;               /* beyond the original sky band: 0 black, 1 the level's stars repeated,
-                                        2 stars and the planet completed */
+                                        2 enhanced: the level's improved sky (panorama PNG, or the art
+                                        extended and completed, e.g. the planet) */
 unsigned zt_hd_toggle_key = 'g';     /* RETROK code (letters are lowercase ASCII) */
 unsigned zt_hd_menu_key = 'm';
 int (*zt_hd_key)(unsigned retrok);   /* set by libretro.c: is this key held? */
@@ -1864,7 +1865,7 @@ static void value_text(int item, char *b, int n)
     case M_AUTOSW: snprintf(b, n, "%s", zt_hd_autoswitch ? "Switch weapon" : "Keep (original)"); break;
     case M_SKY: snprintf(b, n, "%s", zt_hd_sky_fill ? "Fill view height" : "Original band"); break;
     case M_SHADE: snprintf(b, n, "%s", zt_hd_smooth ? "Smooth" : "Dither (original)"); break;
-    case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Stars, full planet" : zt_hd_sky_ext ? "Stars" : "Black"); break;
+    case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Enhanced" : zt_hd_sky_ext ? "Stars" : "Black"); break;
     case M_MENUKEY: snprintf(b, n, "%s", key_names[idx_of_key(zt_hd_menu_key)]); break;
   }
 }

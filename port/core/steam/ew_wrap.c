@@ -69,7 +69,7 @@ static void opts_load(void)
   opt_set("genesis_plus_gx_zt_hd_weapon", "shown");
   opt_set("genesis_plus_gx_zt_hd_autoswitch", "on");
   opt_set("genesis_plus_gx_zt_hd_sky", "original");
-  opt_set("genesis_plus_gx_zt_hd_sky_ext", "full_planet");
+  opt_set("genesis_plus_gx_zt_hd_sky_ext", "enhanced");
   opt_set("genesis_plus_gx_zt_hd_shading", "smooth");
   opt_set("genesis_plus_gx_overclock", "100");
   opt_set("genesis_plus_gx_region_detect", "auto");
