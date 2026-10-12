@@ -46,7 +46,7 @@ Notes
   - The -turbo launch option isn't needed (and is ignored): the patched game keeps its normal speed.
   - If the game runs slowly, lower the resolution in the M menu (e.g. 1280x720).
   - The frontend's "CRT mask" uses ztcrt.fs from this package instead of its own filter (which blurs the
-    HD view down to 320 pixels): light scanlines and an RGB mask at screen resolution, full detail kept.
+    HD view down to 320 pixels): scanlines and an RGB mask at screen resolution, full detail kept.
     Its strengths are numbers at the top of ztcrt.fs (edit in Notepad); without the file the original
     filter is used.
 
