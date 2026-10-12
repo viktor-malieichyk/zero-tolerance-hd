@@ -22,7 +22,9 @@ In game
         Saved to zt_hd.cfg in the game folder.
   Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, D on the
         keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or C change,
-        B closes. Mode (Space) is the game's own, as in the original release.
+        B closes.
+  Space fast forward while held (the frontend's Mode button; 4x, shown by a fast-forward sign at the top
+        right; zt_fast_forward in ew_core_options.cfg sets the speed, 2-8, or 1 to turn it off).
   G     switch between the HD view and the original screen
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.

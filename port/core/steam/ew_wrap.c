@@ -397,12 +397,55 @@ static const volatile unsigned char *frontend_stretch(void)
   return flag;
 }
 
+/* Fast forward while the Mode button is held (Space by default; the game itself doesn't use Mode): the
+   emulation runs zt_fast_forward times per frame (option, default 4; 1 = off), keeping only the last run's
+   sound, and a fast-forward sign is drawn at the top right. */
+static int ff_active;
+static int ff_speed(void)
+{
+  static int speed = -1;
+  int i;
+  if (speed < 0)
+  {
+    speed = 4;
+    for (i = 0; i < nopts; i++) if (!strcmp(opts[i].key, "zt_fast_forward")) speed = atoi(opts[i].val);
+    if (speed < 1) speed = 1;
+    if (speed > 8) speed = 8;
+  }
+  return speed;
+}
+
 API void ew_core_emulate(void)
 {
   const volatile unsigned char *st = frontend_stretch();
+  int i, n;
   if (st) zt_hd_stretch_native = *st != 0;
-  naudio = 0;
-  retro_run();
+  ff_active = ff_speed() > 1 && ((pad[0] >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1);
+  n = ff_active ? ff_speed() : 1;
+  for (i = 0; i < n; i++)
+  {
+    naudio = 0;                                /* the last run's sound only */
+    retro_run();
+  }
+}
+
+/* the fast-forward sign: two white triangles with a dark shadow, at the top right of the frame */
+static void draw_ff(uint32_t *dst)
+{
+  int h = fh / 16, w = h * 3 / 4, m = fh / 24, sh = h / 12 > 1 ? h / 12 : 1, pass, t, y, x;
+  if (h < 8) return;
+  for (pass = 0; pass < 2; pass++)
+    for (t = 0; t < 2; t++)
+    {
+      int x0 = fw - m - (2 - t) * w + (pass ? 0 : sh), y0 = m + (pass ? 0 : sh);
+      uint32_t c = pass ? 0xFFFFFFu : 0x202020u;
+      for (y = 0; y < h; y++)
+      {
+        int span = w - abs(2 * y - (h - 1)) * w / h;
+        for (x = 0; x < span; x++)
+          if (x0 + x >= 0 && x0 + x < fw && y0 + y < fh) dst[(y0 + y) * fw + x0 + x] = c;
+      }
+    }
 }
 
 #define ALLOC_W 7680                         /* 7680 * 4320 bytes = 3840 * 2160 pixels of 4 bytes */
@@ -436,6 +479,7 @@ API void ew_video_render(unsigned int *dst)
   if (!dst) return;
   if (vdata) convert(dst);
   else memset(dst, 0, sizeof(uint32_t) * fw * fh);     /* before the first frame */
+  if (ff_active) draw_ff(dst);
 }
 
 API int ew_audio_render(signed short *buf, int max_samples)
