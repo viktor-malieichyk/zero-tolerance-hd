@@ -31,6 +31,7 @@ int zt_hd_sky_ext = 2;               /* beyond the original sky band: 0 black, 1
 unsigned zt_hd_toggle_key = 'g';     /* RETROK code (letters are lowercase ASCII) */
 unsigned zt_hd_menu_key = 'm';
 int (*zt_hd_key)(unsigned retrok);   /* set by libretro.c: is this key held? */
+int (*zt_hd_joy)(unsigned id);       /* set by libretro.c: is pad 1's button (libretro joypad id) held? */
 void (*zt_hd_av_changed)(void);      /* set by libretro.c: output size changed */
 char zt_hd_cfg_path[1024];           /* settings file written by the in-game menu */
 char zt_hd_rom_dir[1024];            /* the game's folder: second place for the sky PNG */
@@ -1786,6 +1787,7 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
    extinguisher, the fists last; the nearest in C's order within a kind) and presses C for the player (the
    game's own switch, so its HUD and weapon sprite follow) until that slot is selected, holding and releasing
    each press long enough for the 10 Hz logic to see it. Called once a frame with the pad's buttons. */
+static int pad_hold;                 /* zt_hd_input: no pad input to the game until all buttons are up */
 static int weapon_rank(int type)
 {
   switch (type)
@@ -1802,6 +1804,7 @@ void zt_hd_pad(unsigned short *pad)
   enum { HOLD = 8, GAP = 8 };
   static int prev_type = -1, prev_slot = -1, target = -1, t, presses;
   int slot = READ_BYTE(work_ram, 0x104A), type, i;
+  if (pad_hold) *pad = 0;                                             /* the menu just closed: see zt_hd_input */
   if (!zt_hd_autoswitch || !live_w(0xFF7770) || slot > 4) { target = -1; prev_slot = -1; return; }   /* ZT_INGAME */
   type = SLOT_TYPE(slot);
   if (target < 0 && slot == prev_slot && prev_type && !type)       /* the current weapon just ran out */
@@ -1923,24 +1926,41 @@ static void menu_change(int item, int dir)
 
 /* Called once per frame by libretro.c after input polling. Returns 1 while the menu is open (the
    emulation is paused then). */
+/* the menu's input, once a frame before emulation: keyboard (menu key, switch key, arrows) and controller
+   (pad 1, Genesis names: Mode (RetroPad Select) opens and closes, D-pad up/down select, left/right or C
+   (RetroPad A) change, B closes). Returns 1 while
+   the menu is open (emulation paused). After the menu closes, the game gets no pad input until every
+   button is released, so the button that closed it doesn't also fire or switch weapons. */
 int zt_hd_input(void)
 {
-  static int prev[8];
+  enum { K_MENU, K_TOGGLE, K_UP, K_DOWN, K_LEFT, K_RIGHT, J_SELECT, J_UP, J_DOWN, J_LEFT, J_RIGHT, J_A, J_B, N_IN };
+  /* libretro joypad ids: B 0, Select 2, Up 4, Down 5, Left 6, Right 7, A 8 */
+  static const unsigned joy_id[] = {2, 4, 5, 6, 7, 8, 0};
+  static int prev[N_IN];
   unsigned keys[6];
-  int now[6], hit[6], i;
-  if (!zt_hd_key) return 0;
+  int now[N_IN], hit[N_IN], i, any = 0;
   keys[0] = zt_hd_menu_key; keys[1] = zt_hd_toggle_key; keys[2] = 273; keys[3] = 274; keys[4] = 276; keys[5] = 275;
-  for (i = 0; i < 6; i++) { now[i] = zt_hd_key(keys[i]) ? 1 : 0; hit[i] = now[i] && !prev[i]; prev[i] = now[i]; }
-  if (hit[0]) menu_open = !menu_open;
+  for (i = 0; i < N_IN; i++)
+  {
+    now[i] = i < J_SELECT ? (zt_hd_key && zt_hd_key(keys[i]) ? 1 : 0) : (zt_hd_joy && zt_hd_joy(joy_id[i - J_SELECT]) ? 1 : 0);
+    hit[i] = now[i] && !prev[i]; prev[i] = now[i];
+    if (i >= J_SELECT) any |= now[i];
+  }
+  if (hit[K_MENU] || hit[J_SELECT] || (menu_open && hit[J_B]))
+  {
+    menu_open = !menu_open;
+    if (!menu_open) pad_hold = 1;
+  }
   if (!menu_open)
   {
-    if (hit[1] && zt_hd_layout == 3) show_original = !show_original;
+    if (pad_hold && !any && !(zt_hd_joy && (zt_hd_joy(9) || zt_hd_joy(1) || zt_hd_joy(3)))) pad_hold = 0;   /* X, Y, Start too */
+    if (hit[K_TOGGLE] && zt_hd_layout == 3) show_original = !show_original;
     return 0;
   }
-  if (hit[2]) menu_sel = (menu_sel + M_COUNT - 1) % M_COUNT;    /* up */
-  if (hit[3]) menu_sel = (menu_sel + 1) % M_COUNT;              /* down */
-  if (hit[4]) menu_change(menu_sel, -1);                        /* left */
-  if (hit[5]) menu_change(menu_sel, +1);                        /* right */
+  if (hit[K_UP] || hit[J_UP]) menu_sel = (menu_sel + M_COUNT - 1) % M_COUNT;
+  if (hit[K_DOWN] || hit[J_DOWN]) menu_sel = (menu_sel + 1) % M_COUNT;
+  if (hit[K_LEFT] || hit[J_LEFT]) menu_change(menu_sel, -1);
+  if (hit[K_RIGHT] || hit[J_RIGHT] || hit[J_A]) menu_change(menu_sel, +1);
   return 1;
 }
 
@@ -1963,7 +1983,7 @@ static void text(int x, int y, const char *str, int ts, uint16 col)
 
 static void draw_menu(void)
 {
-  int ts = oh >= 720 ? 2 : 1, lh = 16 * ts, bw = 46 * 8 * ts, bh = (M_COUNT + 5) * lh, bx = (ow - bw) / 2, by = (oh - bh) / 2;
+  int ts = oh >= 720 ? 2 : 1, lh = 16 * ts, bw = 46 * 8 * ts, bh = (M_COUNT + 6) * lh, bx = (ow - bw) / 2, by = (oh - bh) / 2;
   int i, x, y;
   char b[64];
   for (y = by; y < by + bh && y < oh; y++)          /* darkened box */
@@ -1983,6 +2003,7 @@ static void draw_menu(void)
   }
   snprintf(b, sizeof b, "Up/Down select, Left/Right change, %s close", key_names[idx_of_key(zt_hd_menu_key)]);
   text(bx + 2 * 8 * ts, by + (M_COUNT + 3) * lh, b, ts, 0x7BEF);
+  text(bx + 2 * 8 * ts, by + (M_COUNT + 4) * lh, "Pad: Mode/Select, D-pad, C change, B close", ts, 0x7BEF);
 }
 
 /* Compose the output frame. native: the emulator's RGB565 frame (pitch in pixels).

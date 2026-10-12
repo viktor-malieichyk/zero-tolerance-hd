@@ -44,6 +44,7 @@ L = "libretro/libretro.c"
 patch(L, '#include "libretro_core_options.h"', '#include "libretro_core_options.h"\n#include "zt_hd.h"')
 patch(L, '''static bool update_viewport(void)
 {''', '''static int zt_key_fn(unsigned k) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, k) : 0; }
+static int zt_joy_fn(unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, id) : 0; }
 static void zt_av_fn(void)
 {
   struct retro_system_av_info info;
@@ -91,7 +92,7 @@ patch(L, '''  var.key = "genesis_plus_gx_no_sprite_limit";''', done_if='"genesis
     var.key = "genesis_plus_gx_zt_hd_sky"; var.value = NULL;
     environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
     if (var.value) zt_hd_sky_fill = !strcmp(var.value, "fill");
-    zt_hd_key = zt_key_fn; zt_hd_av_changed = zt_av_fn;
+    zt_hd_key = zt_key_fn; zt_hd_joy = zt_joy_fn; zt_hd_av_changed = zt_av_fn;
     if (first_run)
     {
       const char *sd = NULL;

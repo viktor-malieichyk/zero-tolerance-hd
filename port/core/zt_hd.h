@@ -10,6 +10,7 @@ void zt_hd_output_size(int *w, int *h);
 extern int zt_hd_weapon, zt_hd_autoswitch, zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_stretch_native;
 extern unsigned zt_hd_toggle_key, zt_hd_menu_key;
 extern int (*zt_hd_key)(unsigned retrok);
+extern int (*zt_hd_joy)(unsigned id);
 extern void (*zt_hd_av_changed)(void);
 extern char zt_hd_cfg_path[1024], zt_hd_rom_dir[1024];
 int zt_hd_input(void);
