@@ -1928,33 +1928,33 @@ static void menu_change(int item, int dir)
 /* Called once per frame by libretro.c after input polling. Returns 1 while the menu is open (the
    emulation is paused then). */
 /* the menu's input, once a frame before emulation: keyboard (menu key, switch key, arrows) and controller
-   (pad 1, Genesis names: Mode (RetroPad Select) opens and closes, D-pad up/down select, left/right or C
-   (RetroPad A) change, B closes). Returns 1 while
+   (pad 1, Genesis names: Z (RetroPad R) opens and closes, D-pad up/down select, left/right or C (RetroPad
+   A) change, B closes; Mode stays the game's: QUByte's Steam ROM rewinds with it). Returns 1 while
    the menu is open (emulation paused). After the menu closes, the game gets no pad input until every
    button is released, so the button that closed it doesn't also fire or switch weapons. */
 int zt_hd_input(void)
 {
-  enum { K_MENU, K_TOGGLE, K_UP, K_DOWN, K_LEFT, K_RIGHT, J_SELECT, J_UP, J_DOWN, J_LEFT, J_RIGHT, J_A, J_B, N_IN };
-  /* libretro joypad ids: B 0, Select 2, Up 4, Down 5, Left 6, Right 7, A 8 */
-  static const unsigned joy_id[] = {2, 4, 5, 6, 7, 8, 0};
+  enum { K_MENU, K_TOGGLE, K_UP, K_DOWN, K_LEFT, K_RIGHT, J_MENU, J_UP, J_DOWN, J_LEFT, J_RIGHT, J_A, J_B, N_IN };
+  /* libretro joypad ids: R 11 (Genesis Z), Up 4, Down 5, Left 6, Right 7, A 8 (Genesis C), B 0 */
+  static const unsigned joy_id[] = {11, 4, 5, 6, 7, 8, 0};
   static int prev[N_IN];
   unsigned keys[6];
   int now[N_IN], hit[N_IN], i, any = 0;
   keys[0] = zt_hd_menu_key; keys[1] = zt_hd_toggle_key; keys[2] = 273; keys[3] = 274; keys[4] = 276; keys[5] = 275;
   for (i = 0; i < N_IN; i++)
   {
-    now[i] = i < J_SELECT ? (zt_hd_key && zt_hd_key(keys[i]) ? 1 : 0) : (zt_hd_joy && zt_hd_joy(joy_id[i - J_SELECT]) ? 1 : 0);
+    now[i] = i < J_MENU ? (zt_hd_key && zt_hd_key(keys[i]) ? 1 : 0) : (zt_hd_joy && zt_hd_joy(joy_id[i - J_MENU]) ? 1 : 0);
     hit[i] = now[i] && !prev[i]; prev[i] = now[i];
-    if (i >= J_SELECT) any |= now[i];
+    if (i >= J_MENU) any |= now[i];
   }
-  if (hit[K_MENU] || hit[J_SELECT] || (menu_open && hit[J_B]))
+  if (hit[K_MENU] || hit[J_MENU] || (menu_open && hit[J_B]))
   {
     menu_open = !menu_open;
     if (!menu_open) pad_hold = 1;
   }
   if (!menu_open)
   {
-    if (pad_hold && !any && !(zt_hd_joy && (zt_hd_joy(9) || zt_hd_joy(1) || zt_hd_joy(3)))) pad_hold = 0;   /* X, Y, Start too */
+    if (pad_hold && !any && !(zt_hd_joy && (zt_hd_joy(9) || zt_hd_joy(1) || zt_hd_joy(3) || zt_hd_joy(2)))) pad_hold = 0;   /* X, Y, Start, Select too */
     if (hit[K_TOGGLE] && zt_hd_layout == 3) show_original = !show_original;
     return 0;
   }
@@ -2004,7 +2004,7 @@ static void draw_menu(void)
   }
   snprintf(b, sizeof b, "Up/Down select, Left/Right change, %s close", key_names[idx_of_key(zt_hd_menu_key)]);
   text(bx + 2 * 8 * ts, by + (M_COUNT + 3) * lh, b, ts, 0x7BEF);
-  text(bx + 2 * 8 * ts, by + (M_COUNT + 4) * lh, "Pad: Mode/Select, D-pad, C change, B close", ts, 0x7BEF);
+  text(bx + 2 * 8 * ts, by + (M_COUNT + 4) * lh, "Pad: Z open/close, D-pad, C change, B close", ts, 0x7BEF);
 }
 
 /* Compose the output frame. native: the emulator's RGB565 frame (pitch in pixels).

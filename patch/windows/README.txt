@@ -24,8 +24,8 @@ In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
         weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key.
         Saved to zt_hd.cfg in RetroArch's saves folder.
-  Controller: Select opens and closes the menu, D-pad up/down select, left/right or C (RetroPad A)
-        change, B closes.
+  Controller: Z (RetroPad R, e.g. RB) opens and closes the menu, D-pad up/down select, left/right or
+        C (RetroPad A) change, B closes.
   G     switch between the HD view and the original screen (when layout = switch with key)
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.

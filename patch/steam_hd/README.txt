@@ -20,9 +20,9 @@ In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
         weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key.
         Saved to zt_hd.cfg in the game folder.
-  Controller: Mode opens and closes the menu (the frontend's Mode button: Back / View on an Xbox pad,
-        Space on the keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or
-        C change, B closes.
+  Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, D on the
+        keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or C change,
+        B closes. Mode (Space) is the game's own, as in the original release.
   G     switch between the HD view and the original screen
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.
@@ -32,7 +32,7 @@ The frontend's own menu (display, Set input, ...)
   Opens with the right mouse button, or the right stick click on the controller (this package moves it
   there from the Guide button, which Steam's overlay usually takes). To use another controller button, set
   zt_frontend_menu_button in ew_core_options.cfg to its SDL joystick number (Xbox-style pad: 0 A, 1 B, 2 X,
-  3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 left stick click, 9 right stick click, 10 Guide). Back (6) is the HD
+  3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 left stick click, 9 right stick click, 10 Guide). LB (4) is the HD
   menu's button by default, so pick another one.
   Frontend keys: F1-F3 load state 1-3, Shift+F1-F3 save, Alt+Enter fullscreen, Pause pauses.
 
