@@ -9,7 +9,7 @@ to the game's own res\game each time it starts.
 Install
   1. In Steam: Zero Tolerance > Manage > Browse local files.
   2. Rename ew_core.dll to ew_core.dll.bak (or copy it somewhere safe).
-  3. Copy ew_core.dll and ew_core_options.cfg from this package into the game folder.
+  3. Copy ew_core.dll, ew_core_options.cfg and ztcrt.fs from this package into the game folder.
   To undo: put the original ew_core.dll back, or use Steam's "Verify integrity of game files".
 
   Only the Steam release's res\game is patched (it is identified by checksum). With any other ROM the
@@ -45,7 +45,10 @@ Notes
   - Save states from the original emulator can't be loaded by this one.
   - The -turbo launch option isn't needed (and is ignored): the patched game keeps its normal speed.
   - If the game runs slowly, lower the resolution in the M menu (e.g. 1280x720).
-  - If the frontend's CRT filter is on, turn it off for a sharp HD image.
+  - The frontend's "CRT mask" uses ztcrt.fs from this package instead of its own filter (which blurs the
+    HD view down to 320 pixels): light scanlines and an RGB mask at screen resolution, full detail kept.
+    Its strengths are numbers at the top of ztcrt.fs (edit in Notepad); without the file the original
+    filter is used.
 
 Source, licence (MIT) and build instructions: https://github.com/viktor-malieichyk/zero-tolerance-hd
 Genesis Plus GX is by Eke-Eke and contributors under its own non-commercial licence, which applies to this

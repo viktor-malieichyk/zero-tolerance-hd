@@ -16,6 +16,7 @@ D="$OUT/$V/zero_tolerance_hd_steam"; mkdir -p "$D"
 i686-w64-mingw32-strip -o "$D/ew_core.dll" "$STEAM_DLL"
 crlf "$HERE/patch/steam_hd/README.txt" "$D/README.txt"
 crlf "$HERE/patch/steam_hd/ew_core_options.cfg" "$D/ew_core_options.cfg"
+crlf "$HERE/patch/steam_hd/ztcrt.fs" "$D/ztcrt.fs"
 crlf "$HERE/LICENSE" "$D/LICENSE.txt"
 
 # Windows RetroArch

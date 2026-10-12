@@ -272,11 +272,36 @@ static void frontend_menu_button(void)
   }
 }
 
+/* The frontend's "CRT mask" option draws through the GLSL shader res\crtf, which resamples the picture to
+   the grid of its uniform iResolution: the screen size this DLL reports (320 wide, for integer scaling), so
+   the HD view was blurred to 320x180 under the scanlines. When ztcrt.fs (a light screen-resolution CRT
+   shader) is next to this DLL, the shader's path string ("res\crtf" at $45C8C8, read by the exe right after
+   ew_core_init) is pointed at it instead, in memory only. */
+static void frontend_crt_shader(void)
+{
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *p;
+  char path[MAX_PATH];
+  FILE *f;
+  DWORD old;
+  if (!base || memcmp(base + 0x5C7D8, "stretch", 8)) return;
+  p = base + 0x5C8C8;
+  if (memcmp(p, "res\\crtf", 9)) return;
+  snprintf(path, sizeof path, "%sztcrt.fs", dir);
+  if (!(f = fopen(path, "rb"))) return;
+  fclose(f);
+  if (VirtualProtect(p, 9, PAGE_READWRITE, &old))
+  {
+    memcpy(p, "ztcrt.fs", 9);                  /* the exe opens it relative to the game folder, like res\crtf */
+    VirtualProtect(p, 9, old, &old);
+  }
+}
+
 API bool ew_core_init(int sample_rate, unsigned int options)
 {
   (void)sample_rate; (void)options;           /* the core outputs 44100 Hz, which is what the frontend asks for */
   opts_load();
   frontend_menu_button();
+  frontend_crt_shader();
   expected_output(&fw, &fh);                   /* the window is sized from this before any frame exists */
   retro_set_environment(env_cb);
   retro_set_video_refresh(video_cb);
