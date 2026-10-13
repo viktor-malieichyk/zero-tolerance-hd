@@ -387,15 +387,15 @@ static void frontend_stretch_fit(void)
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
   int a = 0, b = 0;
   if (!base || memcmp(base + 0x5C7D8, "stretch", 8)) { zlog("frontend not recognised (base %p): no stretch patch", (void *)base); return; }
-  if (!memcmp(base + 0x304AC, sdl, sizeof sdl))
+  if (!memcmp(base + 0x308AC, sdl, sizeof sdl))
   {
-    zt_ret_sdl = base + 0x304AC + sizeof sdl;
-    a = hook_jump(base + 0x304AC, sizeof sdl, zt_stub_sdl);
+    zt_ret_sdl = base + 0x308AC + sizeof sdl;
+    a = hook_jump(base + 0x308AC, sizeof sdl, zt_stub_sdl);
   }
-  if (!memcmp(base + 0x2F51E, gl, sizeof gl))
+  if (!memcmp(base + 0x3051E, gl, sizeof gl))
   {
-    zt_ret_gl = base + 0x2F51E + sizeof gl;
-    b = hook_jump(base + 0x2F51E, sizeof gl, zt_stub_gl);
+    zt_ret_gl = base + 0x3051E + sizeof gl;
+    b = hook_jump(base + 0x3051E, sizeof gl, zt_stub_gl);
   }
   zlog("frontend at %p: stretch patch SDL path %s, GL path %s", (void *)base, a ? "on" : "NOT applied", b ? "on" : "NOT applied");
 }
