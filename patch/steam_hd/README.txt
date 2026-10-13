@@ -46,6 +46,8 @@ Notes
     The frontend's Stretch is patched (in memory) to fit the picture inside the window: it is never cut off,
     and keeps its shape with bars when the window's shape differs. Stretch also stretches the original
     320x224 screens (title, menus, original view) to the full picture.
+  - zt_hd_log.txt (written next to the DLL at each start) records what the DLL found and the window and
+    picture sizes; include it when reporting a display problem.
   - Save states from the original emulator can't be loaded by this one.
   - The -turbo launch option isn't needed (and is ignored): the patched game keeps its normal speed.
   - If the game runs slowly, lower the resolution in the M menu (e.g. 1280x720).

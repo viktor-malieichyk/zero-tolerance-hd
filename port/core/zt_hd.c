@@ -1543,15 +1543,16 @@ static int ammo_text(const uint16 *native, int npitch, int b, char *out, int *en
   *end = x;                                            /* the box column just past the last glyph */
   return n;
 }
-/* text in the HUD font (Menlo Bold, zt_hud_font.h) at the largest size up to px, yellow on a black plate
-   reaching at least to xmin_end (to hide what it covers), bottom-left corner at (x, ybot) in output pixels */
-static void hud_font_text(const char *t, int x, int ybot, int px, int xmin_end)
+/* text in the HUD font (Menlo Bold, zt_hud_font.h), pixelated: the glyphs at the largest size up to px, each
+   glyph pixel drawn as a block x block square with hard edges (coverage halfway or more), yellow on a black
+   plate reaching at least to xmin_end (to hide what it covers), bottom-left corner at (x, ybot) */
+static void hud_font_text(const char *t, int x, int ybot, int px, int block, int xmin_end)
 {
   int s = 0, n = (int)strlen(t), i, gx, gy, w, h, X0, Y0;
   while (s + 1 < ZT_HUD_FONT_SIZES && zt_hud_font_size[s + 1].px <= px) s++;
   w = zt_hud_font_size[s].w; h = zt_hud_font_size[s].h;
-  X0 = x; Y0 = ybot - h - 4;
-  if (xmin_end < X0 + n * w + 4) xmin_end = X0 + n * w + 4;
+  X0 = x; Y0 = ybot - (h + 2) * block;
+  if (xmin_end < X0 + (n * w + 2) * block) xmin_end = X0 + (n * w + 2) * block;
   for (gy = Y0; gy < ybot; gy++)
     for (gx = X0; gx < xmin_end; gx++)
       if (gx >= 0 && gx < ow && gy >= 0 && gy < oh) hd[gy * ow + gx] = 0;
@@ -1559,15 +1560,19 @@ static void hud_font_text(const char *t, int x, int ybot, int px, int xmin_end)
   {
     const char *pos = strchr("0123456789%", t[i]);
     const unsigned char *gd;
-    int rb = (w + 1) / 2;
+    int rb = (w + 1) / 2, bx, by;
     if (!pos) continue;
     gd = zt_hud_font_data + zt_hud_font_size[s].off + (pos - "0123456789%") * rb * h;
     for (gy = 0; gy < h; gy++)
       for (gx = 0; gx < w; gx++)
       {
-        int a = (gd[gy * rb + gx / 2] >> (gx & 1 ? 0 : 4)) & 15, xx = X0 + 2 + i * w + gx, yy = Y0 + 2 + gy;
-        if (!a || xx < 0 || xx >= ow || yy < 0 || yy >= oh) continue;
-        hd[yy * ow + xx] = RGB565(232 * a / 15, 236 * a / 15, 32 * a / 15);
+        if (((gd[gy * rb + gx / 2] >> (gx & 1 ? 0 : 4)) & 15) < 7) continue;
+        for (by = 0; by < block; by++)
+          for (bx = 0; bx < block; bx++)
+          {
+            int xx = X0 + (1 + i * w + gx) * block + bx, yy = Y0 + (1 + gy) * block + by;
+            if (xx >= 0 && xx < ow && yy >= 0 && yy < oh) hd[yy * ow + xx] = RGB565(232, 236, 32);
+          }
       }
   }
 }
@@ -1675,7 +1680,10 @@ static void draw_hud(const uint16 *native, int npitch, int px, int py, int W, in
     char t[8];
     int end;
     if (ammo_text(native, npitch, b, t, &end))
-      hud_font_text(t, hux(BX + box_x[b] + 1), huy(BY + 36), (int)(10 * hu.u), hux(BX + box_x[b] + 1 + end));
+    {
+      int block = (int)(hu.u * 2 / 3 + 0.5) > 2 ? (int)(hu.u * 2 / 3 + 0.5) : 2;   /* a bit coarser than the screen */
+      hud_font_text(t, hux(BX + box_x[b] + 1), huy(BY + 36), (int)(10 * hu.u / block), block, hux(BX + box_x[b] + 1 + end));
+    }
   }
 }
 #undef YELLOW

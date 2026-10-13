@@ -25,6 +25,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <zlib.h>
 #include "libretro.h"
 #ifdef ZT_STEAM_IPS
@@ -41,6 +42,7 @@ static int16_t audio[4096 * 2];
 static int naudio;
 static uint16_t pad[2];                    /* libretro joypad bits per player */
 static int alloc_pending;
+static void zlog(const char *fmt, ...);
 
 /* ---------------------------------------------------------------- core options */
 static struct { char key[64], val[64]; } opts[128];
@@ -152,6 +154,7 @@ static size_t vpitch;
 static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
 {
   if (!data || !w || !h) return;               /* frame duplicated: keep the last one */
+  if ((int)w != fw || (int)h != fh) { static int n; if (n++ < 20) zlog("picture size now %ux%u", w, h); }
   vdata = data; vpitch = pitch; fw = w; fh = h;
 }
 
@@ -248,6 +251,22 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
   return TRUE;
 }
 
+/* zt_hd_log.txt next to this DLL: what the frontend patches found and what the window/picture sizes are,
+   to diagnose display problems on machines we can't test on (rewritten at each start) */
+static void zlog(const char *fmt, ...)
+{
+  static int started;
+  char path[MAX_PATH];
+  FILE *f;
+  va_list ap;
+  snprintf(path, sizeof path, "%szt_hd_log.txt", dir);
+  if (!(f = fopen(path, started ? "a" : "w"))) return;
+  started = 1;
+  va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+  fputc('\n', f);
+  fclose(f);
+}
+
 /* The frontend's own menu (settings, Set input, ...) opens with the right mouse button or a controller
    button: its joystick poll ($432D30) returns "menu" when the first pressed button is 10 (SDL's Guide on an
    XInput pad; only with its "guide" setting on), compared as an immediate byte in "cmp esi, 0Ah" at $432D84.
@@ -309,6 +328,14 @@ uint64_t zt_fit_size(int win_w, int win_h)
   if (sw <= 0 || sh <= 0) { sw = 16; sh = 9; }
   w = (int)((int64_t)sw * win_h / sh); h = win_h;
   if (w > win_w) { w = win_w; h = (int)((int64_t)sh * win_w / sw); }
+  {
+    static int lw, lh, lfw, lfh, n;
+    if (n < 40 && (win_w != lw || win_h != lh || fw != lfw || fh != lfh))
+    {
+      zlog("stretch: window %dx%d, picture %dx%d -> drawn %dx%d", win_w, win_h, fw, fh, w, h);
+      lw = win_w; lh = win_h; lfw = fw; lfh = fh; n++;
+    }
+  }
   return (uint32_t)w | (uint64_t)(uint32_t)h << 32;
 }
 void *zt_ret_sdl __asm__("zt_ret_sdl");
@@ -338,15 +365,16 @@ __asm__(
   "  movl %edi, -4(%ebp)\n"
   "  jmp *zt_ret_gl\n");
 
-static void hook_jump(unsigned char *at, int len, const void *to)
+static int hook_jump(unsigned char *at, int len, const void *to)
 {
   DWORD old;
   int32_t rel = (int32_t)((const unsigned char *)to - (at + 5));
-  if (!VirtualProtect(at, len, PAGE_EXECUTE_READWRITE, &old)) return;
+  if (!VirtualProtect(at, len, PAGE_EXECUTE_READWRITE, &old)) return 0;
   at[0] = 0xE9; memcpy(at + 1, &rel, 4);
   memset(at + 5, 0x90, len - 5);
   VirtualProtect(at, len, old, &old);
   FlushInstructionCache(GetCurrentProcess(), at, len);
+  return 1;
 }
 
 static void frontend_stretch_fit(void)
@@ -357,17 +385,19 @@ static void frontend_stretch_fit(void)
                                        0x8b,0xc8,0x8b,0x7b,0x3c,0x8b,0xc6,0x89,0x7d,0xfc,0x99,0xf7,0xf9,0x8b,0xf0,0x89,
                                        0x75,0xf8};
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
-  if (!base || memcmp(base + 0x5C7D8, "stretch", 8)) return;
+  int a = 0, b = 0;
+  if (!base || memcmp(base + 0x5C7D8, "stretch", 8)) { zlog("frontend not recognised (base %p): no stretch patch", (void *)base); return; }
   if (!memcmp(base + 0x304AC, sdl, sizeof sdl))
   {
     zt_ret_sdl = base + 0x304AC + sizeof sdl;
-    hook_jump(base + 0x304AC, sizeof sdl, zt_stub_sdl);
+    a = hook_jump(base + 0x304AC, sizeof sdl, zt_stub_sdl);
   }
   if (!memcmp(base + 0x2F51E, gl, sizeof gl))
   {
     zt_ret_gl = base + 0x2F51E + sizeof gl;
-    hook_jump(base + 0x2F51E, sizeof gl, zt_stub_gl);
+    b = hook_jump(base + 0x2F51E, sizeof gl, zt_stub_gl);
   }
+  zlog("frontend at %p: stretch patch SDL path %s, GL path %s", (void *)base, a ? "on" : "NOT applied", b ? "on" : "NOT applied");
 }
 #else
 static void frontend_stretch_fit(void) {}
@@ -387,6 +417,7 @@ static void auto_resolution(void)
       if (w > 2560) w = 2560;
       snprintf(v, sizeof v, "%dx720", w);
       opt_set("genesis_plus_gx_zt_hd_res", v);
+      zlog("resolution auto: desktop %dx%d -> %s", dw, dh, v);
     }
 }
 
@@ -399,6 +430,7 @@ API bool ew_core_init(int sample_rate, unsigned int options)
   frontend_stretch_fit();
   auto_resolution();
   expected_output(&fw, &fh);                   /* the window is sized from this before any frame exists */
+  zlog("expected picture %dx%d", fw, fh);
   retro_set_environment(env_cb);
   retro_set_video_refresh(video_cb);
   retro_set_audio_sample(audio_one);
