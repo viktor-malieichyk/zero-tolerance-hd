@@ -60,7 +60,7 @@ static void opts_load(void)
   char path[MAX_PATH + 32], line[256], k[64], v[64];
   FILE *f;
   opt_set("genesis_plus_gx_zt_hd", "enabled");
-  opt_set("genesis_plus_gx_zt_hd_res", "1280x720");
+  opt_set("genesis_plus_gx_zt_hd_res", "auto");
   opt_set("genesis_plus_gx_zt_hd_fov", "106");
   opt_set("genesis_plus_gx_zt_hd_layout", "toggle");
   opt_set("genesis_plus_gx_zt_hd_toggle_key", "g");
@@ -296,12 +296,108 @@ static void frontend_crt_shader(void)
   }
 }
 
+/* The frontend's Stretch fits the picture to the window's height only (width = screen_w * window height /
+   screen_h), so on a screen narrower than the picture (16:10, Steam Deck, a narrow window) the sides were
+   cut off. Both of its stretch computations (the SDL path at $4308AC and the GL / CRT path at $43051E)
+   are pointed at stubs here that fit the picture inside the window instead: the full height, or the
+   full width when the height would make it too wide. In memory only, after checking the exact bytes. */
+#if defined(__i386__) && defined(_WIN32)
+uint64_t zt_fit_size(int win_w, int win_h) __asm__("zt_fit_size");
+uint64_t zt_fit_size(int win_w, int win_h)
+{
+  int sw = fw, sh = fh, w, h;                /* the picture's shape: the HD output's size */
+  if (sw <= 0 || sh <= 0) { sw = 16; sh = 9; }
+  w = (int)((int64_t)sw * win_h / sh); h = win_h;
+  if (w > win_w) { w = win_w; h = (int)((int64_t)sh * win_w / sw); }
+  return (uint32_t)w | (uint64_t)(uint32_t)h << 32;
+}
+void *zt_ret_sdl __asm__("zt_ret_sdl");
+void *zt_ret_gl __asm__("zt_ret_gl");
+extern char zt_stub_sdl[] __asm__("zt_stub_sdl");
+extern char zt_stub_gl[] __asm__("zt_stub_gl");
+__asm__(
+  ".text\n"
+  /* SDL path: this in esi (window width +38h, height +3Ch); result: width in edi, height in ebx */
+  "zt_stub_sdl:\n"
+  "  pushl 0x3c(%esi)\n"
+  "  pushl 0x38(%esi)\n"
+  "  call zt_fit_size\n"
+  "  addl $8, %esp\n"
+  "  movl %eax, %edi\n"
+  "  movl %edx, %ebx\n"
+  "  jmp *zt_ret_sdl\n"
+  /* GL path: this in ebx; result: width in esi and [ebp-8], height in edi and [ebp-4] */
+  "zt_stub_gl:\n"
+  "  pushl 0x3c(%ebx)\n"
+  "  pushl 0x38(%ebx)\n"
+  "  call zt_fit_size\n"
+  "  addl $8, %esp\n"
+  "  movl %eax, %esi\n"
+  "  movl %edx, %edi\n"
+  "  movl %esi, -8(%ebp)\n"
+  "  movl %edi, -4(%ebp)\n"
+  "  jmp *zt_ret_gl\n");
+
+static void hook_jump(unsigned char *at, int len, const void *to)
+{
+  DWORD old;
+  int32_t rel = (int32_t)((const unsigned char *)to - (at + 5));
+  if (!VirtualProtect(at, len, PAGE_EXECUTE_READWRITE, &old)) return;
+  at[0] = 0xE9; memcpy(at + 1, &rel, 4);
+  memset(at + 5, 0x90, len - 5);
+  VirtualProtect(at, len, old, &old);
+  FlushInstructionCache(GetCurrentProcess(), at, len);
+}
+
+static void frontend_stretch_fit(void)
+{
+  static const unsigned char sdl[28] = {0xe8,0x83,0x65,0x00,0x00,0x8b,0xf8,0x0f,0xaf,0x7e,0x3c,0xe8,0x7e,0x65,0x00,0x00,
+                                        0x8b,0xc8,0x8b,0x5e,0x3c,0x8b,0xc7,0x99,0xf7,0xf9,0x8b,0xf8};
+  static const unsigned char gl[34] = {0xe8,0x11,0x69,0x00,0x00,0x8b,0xf0,0x0f,0xaf,0x73,0x3c,0xe8,0x0c,0x69,0x00,0x00,
+                                       0x8b,0xc8,0x8b,0x7b,0x3c,0x8b,0xc6,0x89,0x7d,0xfc,0x99,0xf7,0xf9,0x8b,0xf0,0x89,
+                                       0x75,0xf8};
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  if (!base || memcmp(base + 0x5C7D8, "stretch", 8)) return;
+  if (!memcmp(base + 0x304AC, sdl, sizeof sdl))
+  {
+    zt_ret_sdl = base + 0x304AC + sizeof sdl;
+    hook_jump(base + 0x304AC, sizeof sdl, zt_stub_sdl);
+  }
+  if (!memcmp(base + 0x2F51E, gl, sizeof gl))
+  {
+    zt_ret_gl = base + 0x2F51E + sizeof gl;
+    hook_jump(base + 0x2F51E, sizeof gl, zt_stub_gl);
+  }
+}
+#else
+static void frontend_stretch_fit(void) {}
+#endif
+
+/* genesis_plus_gx_zt_hd_res = "auto" (the default here): 720 rows in the desktop's shape, so the picture
+   fills a 16:10 or ultrawide screen as well as a 16:9 one */
+static void auto_resolution(void)
+{
+  int i, dw = GetSystemMetrics(SM_CXSCREEN), dh = GetSystemMetrics(SM_CYSCREEN), w;
+  char v[32];
+  for (i = 0; i < nopts; i++)
+    if (!strcmp(opts[i].key, "genesis_plus_gx_zt_hd_res") && !strcmp(opts[i].val, "auto"))
+    {
+      w = dw > 0 && dh > 0 ? (720 * dw / dh + 1) & ~1 : 1280;
+      if (w < 960) w = 960;
+      if (w > 2560) w = 2560;
+      snprintf(v, sizeof v, "%dx720", w);
+      opt_set("genesis_plus_gx_zt_hd_res", v);
+    }
+}
+
 API bool ew_core_init(int sample_rate, unsigned int options)
 {
   (void)sample_rate; (void)options;           /* the core outputs 44100 Hz, which is what the frontend asks for */
   opts_load();
   frontend_menu_button();
   frontend_crt_shader();
+  frontend_stretch_fit();
+  auto_resolution();
   expected_output(&fw, &fh);                   /* the window is sized from this before any frame exists */
   retro_set_environment(env_cb);
   retro_set_video_refresh(video_cb);

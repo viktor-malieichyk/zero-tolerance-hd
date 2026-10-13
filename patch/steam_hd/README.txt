@@ -40,10 +40,12 @@ The frontend's own menu (display, Set input, ...)
 
 Notes
   - ew_core_options.cfg holds the starting settings; the menu's zt_hd.cfg overrides them.
-  - The window takes its shape (16:9 by default) from the resolution and layout in ew_core_options.cfg.
-    The frontend's Stretch fits the picture to the window's height only, so a window narrower than 16:9
-    (or a 16:10 screen) cuts the sides; with Stretch off it letterboxes correctly. Stretch also stretches
-    the original 320x224 screens (title, menus, original view) to the full width.
+  - The picture takes your desktop's shape (genesis_plus_gx_zt_hd_res = "auto" in ew_core_options.cfg: 720
+    rows, as wide as the desktop's shape needs, e.g. 1152x720 on a 16:10 screen or a Steam Deck), so it fills
+    the screen in fullscreen. A fixed size such as "1920x1080" can be set there or in the M menu instead.
+    The frontend's Stretch is patched (in memory) to fit the picture inside the window: it is never cut off,
+    and keeps its shape with bars when the window's shape differs. Stretch also stretches the original
+    320x224 screens (title, menus, original view) to the full picture.
   - Save states from the original emulator can't be loaded by this one.
   - The -turbo launch option isn't needed (and is ignored): the patched game keeps its normal speed.
   - If the game runs slowly, lower the resolution in the M menu (e.g. 1280x720).
