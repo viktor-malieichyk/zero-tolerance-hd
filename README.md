@@ -9,7 +9,7 @@ Mods for **Zero Tolerance** (Technopop, Accolade, 1994), the Mega Drive / Genesi
    libretro core that re-renders the 3D view natively at any resolution (960x540 to 3840x2160) and field
    of view, from the running game's own state, textures, sprites and sky. The game runs unchanged in
    emulation; the HUD is rearranged along the bottom. In-game settings menu, side-by-side or switchable
-   original view.
+   original view, twin-stick controls (left stick walks and strafes, right stick turns).
 3. **Steam drop-in** (`port/core/steam/`): the HD renderer as a replacement `ew_core.dll` for the Steam
    release (QUByte Classics), so it runs from the Steam game without RetroArch.
 

@@ -30,11 +30,18 @@ Other games
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key.
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, controls, stick turn
+        speed, menu key.
         Saved to zt_hd.cfg in RetroArch's saves folder.
   Controller: Z (RetroPad R, e.g. RB) opens and closes the menu, D-pad up/down select, left/right or
         C (RetroPad A) change, B closes.
   G     switch between the HD view and the original screen (when layout = switch with key)
+  Twin stick (on by default; "Controls" in the menu): left stick walks and strafes, both at once and as
+        fast as it is pushed; right stick turns ("Stick turn speed" in the menu). A on its own jumps (in
+        Underground only with its classic control setting, where A is otherwise unused), L3 held crouches,
+        R2 fires (B), L2 next weapon (C). The D-pad and the buttons keep their original functions; the
+        left stick also works as the D-pad outside the levels. RetroArch's "Analog to Digital Type" should
+        stay at None for the left stick.
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.
 

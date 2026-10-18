@@ -229,13 +229,77 @@ static int key_down(unsigned retrok)
   return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
+/* Twin-stick controls (zt_hd.c) need the analog sticks, which the frontend doesn't pass on (only the 12
+   buttons, from SDL joystick buttons and hats). They, the triggers and L3 are read here from the first game
+   controller through the frontend's own SDL2.dll, already loaded and pumping joystick events: sticks as
+   libretro analog axes, LT / RT / L3 as RetroPad L2 / R2 / L3 (next weapon, fire, crouch). */
+static struct
+{
+  int (*init_sub)(uint32_t);
+  uint32_t (*was_init)(uint32_t);
+  int (*num)(void);
+  int (*is_gc)(int);
+  void *(*open)(int);
+  int (*attached)(void *);
+  const char *(*name)(void *);
+  int16_t (*axis)(void *, int);
+  uint8_t (*button)(void *, int);
+  void *gc;
+  int tried, wait;
+} sdl;
+static int16_t stick_axis[4];               /* left x, y, right x, y */
+static uint16_t pad_extra;                  /* L2, R2, L3 bits for player 1 */
+
+static void controller_poll(void)
+{
+  enum { INIT_GAMECONTROLLER = 0x2000, AXIS_LT = 4, AXIS_RT = 5, BUTTON_LEFTSTICK = 7 };
+  int i;
+  if (!sdl.tried)
+  {
+    HMODULE m = GetModuleHandleA("SDL2.dll");
+    sdl.tried = 1;
+    if (!m) { zlog("controller: SDL2.dll not loaded, no analog sticks"); return; }
+#define SDLFN(f, n) *(FARPROC *)&sdl.f = GetProcAddress(m, n)
+    SDLFN(init_sub, "SDL_InitSubSystem"); SDLFN(was_init, "SDL_WasInit"); SDLFN(num, "SDL_NumJoysticks");
+    SDLFN(is_gc, "SDL_IsGameController"); SDLFN(open, "SDL_GameControllerOpen");
+    SDLFN(attached, "SDL_GameControllerGetAttached"); SDLFN(name, "SDL_GameControllerName");
+    SDLFN(axis, "SDL_GameControllerGetAxis"); SDLFN(button, "SDL_GameControllerGetButton");
+#undef SDLFN
+    if (!sdl.init_sub || !sdl.was_init || !sdl.num || !sdl.is_gc || !sdl.open || !sdl.attached || !sdl.name ||
+        !sdl.axis || !sdl.button)
+    {
+      zlog("controller: SDL2.dll lacks the game controller API, no analog sticks"); sdl.axis = NULL; return;
+    }
+    if (!(sdl.was_init(INIT_GAMECONTROLLER) & INIT_GAMECONTROLLER) && sdl.init_sub(INIT_GAMECONTROLLER) < 0)
+    {
+      zlog("controller: SDL game controller init failed, no analog sticks"); sdl.axis = NULL; return;
+    }
+  }
+  if (!sdl.axis) return;
+  if (sdl.gc && !sdl.attached(sdl.gc)) { zlog("controller: disconnected"); sdl.gc = NULL; }
+  if (!sdl.gc && --sdl.wait <= 0)            /* look for one about once a second */
+  {
+    sdl.wait = 60;
+    for (i = 0; i < sdl.num() && !sdl.gc; i++)
+      if (sdl.is_gc(i) && (sdl.gc = sdl.open(i)))
+        zlog("controller: \"%s\" (analog sticks, LT, RT, L3)", sdl.name(sdl.gc) ? sdl.name(sdl.gc) : "?");
+  }
+  if (!sdl.gc) { memset(stick_axis, 0, sizeof stick_axis); pad_extra = 0; return; }
+  for (i = 0; i < 4; i++) stick_axis[i] = sdl.axis(sdl.gc, i);
+  pad_extra = (sdl.axis(sdl.gc, AXIS_LT) > 16384 ? 1 << RETRO_DEVICE_ID_JOYPAD_L2 : 0)
+            | (sdl.axis(sdl.gc, AXIS_RT) > 16384 ? 1 << RETRO_DEVICE_ID_JOYPAD_R2 : 0)
+            | (sdl.button(sdl.gc, BUTTON_LEFTSTICK) ? 1 << RETRO_DEVICE_ID_JOYPAD_L3 : 0);
+}
+
 static int16_t input_cb(unsigned port, unsigned device, unsigned index, unsigned id)
 {
-  (void)index;
+  uint16_t bits;
   if (device == RETRO_DEVICE_KEYBOARD) return key_down(id);
+  if (device == RETRO_DEVICE_ANALOG) return port == 0 && index < 2 && id < 2 ? stick_axis[index * 2 + id] : 0;
   if (device != RETRO_DEVICE_JOYPAD || port > 1) return 0;
-  if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return pad[port];
-  return id < 16 ? (pad[port] >> id) & 1 : 0;
+  bits = pad[port] | (port == 0 ? pad_extra : 0);
+  if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return bits;
+  return id < 16 ? (bits >> id) & 1 : 0;
 }
 
 /* ---------------------------------------------------------------- ew_* interface */
@@ -694,6 +758,7 @@ API void ew_core_emulate(void)
 #ifdef ZT_STEAM_IPS
   if (zt_hd_game_req >= 0) switch_game();
 #endif
+  controller_poll();
   ff_active = ff_speed() > 1 && ((pad[0] >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1);
   n = ff_active ? ff_speed() : 1;
   for (i = 0; i < n; i++)

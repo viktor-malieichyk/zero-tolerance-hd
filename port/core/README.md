@@ -25,6 +25,16 @@ draws those frames. Cost on Apple Silicon (native), emulation included: about 2.
   modules along the bottom, built from the original HUD's pieces (design: `port/design`): left the portrait
   with "+ health" under it, middle the weapons bar (ammo counts redrawn in Menlo Bold at the output
   resolution, `zt_hud_font.h` from `make_hud_font.py`), right "ENEMIES <count>" over the map.
+- `genesis_plus_gx_zt_hd_sticks`: `on` (default) or `off`. Twin-stick controls: the left stick walks and
+  strafes (together, scaled by how far it is pushed), the right stick turns at once (no easing in);
+  A on its own jumps, L3 held crouches, R2 fires (B), L2 next weapon (C). With the sticks centred the game's
+  own controls are untouched (the D-pad and buttons work as before). Done where each game's movement
+  routine turns the camera (`zt_game_t.move`): the turn rate and the forward / strafe targets are written
+  there, in the game's own units (`zt_game_t.spd`). Underground's A jump only with its classic control
+  setting (in its others A turns). The Steam DLL reads the sticks, triggers and L3 through the frontend's
+  SDL2.
+- `genesis_plus_gx_zt_hd_turn`: the right stick's fastest turn in angle units (512 a circle) per 10 Hz tick:
+  16 (the D-pad's, about 110 deg/s), 24, 32 (default, 225 deg/s), 40, 48.
 - `genesis_plus_gx_zt_hd_autoswitch`: `on` (default) or `off`. When the current weapon runs out of ammo, switch
   to the best weapon left (a gun, then grenades or mines, then the fire extinguisher; the fists, the melee
   weapon, last) by pressing C for you. Off: the original (you are left on the fists).

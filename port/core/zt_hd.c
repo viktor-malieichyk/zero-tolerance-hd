@@ -33,6 +33,10 @@ unsigned zt_hd_toggle_key = 'g';     /* RETROK code (letters are lowercase ASCII
 unsigned zt_hd_menu_key = 'm';
 int (*zt_hd_key)(unsigned retrok);   /* set by libretro.c: is this key held? */
 int (*zt_hd_joy)(unsigned id);       /* set by libretro.c: is pad 1's button (libretro joypad id) held? */
+int (*zt_hd_analog)(unsigned index, unsigned id);   /* set by libretro.c: pad 1's stick axis (libretro analog
+                                        index left 0 / right 1, id x 0 / y 1), -32768..32767 */
+int zt_hd_sticks = 1;                /* twin-stick controls: left stick walks and strafes, right stick turns */
+int zt_hd_turn_speed = 32;           /* the right stick's fastest turn: angle units (512 a circle) per tick */
 void (*zt_hd_av_changed)(void);      /* set by libretro.c: output size changed */
 char zt_hd_cfg_path[1024];           /* settings file written by the in-game menu */
 char zt_hd_rom_dir[1024];            /* the game's folder: second place for the sky PNG */
@@ -46,7 +50,7 @@ static int ow, oh;                  /* current output size */
 float zt_hd_fov = 106.0f;
 unsigned int zt_hd_after_pc = 0;
 unsigned int zt_hd_after_init_pc = 1;  /* end of the level-start render (1 = none: older ROM patch) */
-unsigned int zt_hd_hook_pc[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};   /* PCs zt_hd_hook wants (odd = none) */
+unsigned int zt_hd_hook_pc[11] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};   /* PCs zt_hd_hook wants (odd = none) */
 unsigned int zt_hd_dbg[8];
 unsigned char zt_hd_dbg_regs[0x20], zt_hd_dbg_bg[0xA0];
 double zt_hd_dbg_cam[8];
@@ -75,26 +79,37 @@ typedef struct {
   int portrait[4], map[4];                    /* HUD: the ID card photo and the map on the original screen (x, y,
                                                  w, h) */
   ram_shift_t ram[12];                        /* Rev A RAM -> this game's, by range */
+  uint32 move;                                /* movement: "move.w turn rate,d0" before it turns the camera */
+  int spd[6];                                 /* the pad's targets: forward, back, agent 3 forward, back, strafe,
+                                                 turn */
+  uint32 ctl_ptr, ctl_classic;                /* Underground: the control scheme (a routine pointer in RAM, set
+                                                 in its options) and the classic one (A + a direction strafes,
+                                                 jumps, crouches); in the others A turns, so A alone doesn't jump.
+                                                 0: always classic */
 } zt_game_t;
 
 static const zt_game_t zt_games[] = {
   /* Zero Tolerance (Rev A; also the mouse hack ROM) */
   {1, 0xB9A6, 0x9D72, 0x1329A, 0x13360, 0x13388, 0x1BCB4, 0x113EE, 0xEDA0, 0x923A, 133,
    0x944E, 0x9454, {0x9458, 0x9458, 0x9458}, 0x945E, 0x9862, {0xAF5E, 0xAD8C, 0xB000, 0xAE2E},
-   0x4392, 0xED50, 0, 0, 0x159FE, 0xBB90, 0x12EF26, 0, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0}}},
+   0x4392, 0xED50, 0, 0, 0x159FE, 0xBB90, 0x12EF26, 0, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0}},
+   0xDC74, {40, -20, 45, -35, 40, 16}, 0, 0},
   /* Zero Tolerance: Underground */
   {3, 0xBC4C, 0x9FB0, 0x13C52, 0x13D18, 0x13D40, 0x1C680, 0x11866, 0xF218, 0x92FC, 228,
    0x968C, 0x9692, {0x9696, 0x9696, 0x9696}, 0x969C, 0x9AA0, {0xB19C, 0xAFCA, 0xB23E, 0xB06C},
-   0x4454, 0xF1C8, 0, 0, 0x163BE, 0xBE36, 0, 0xFF0E74, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0xFF0E74, 0xFFF000, 4}}},
+   0x4454, 0xF1C8, 0, 0, 0x163BE, 0xBE36, 0, 0xFF0E74, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0xFF0E74, 0xFFF000, 4}},
+   0xE0EC, {44, -24, 49, -34, 44, 20}, 0xFFCD30, 0xDD80},
   /* Beyond Zero Tolerance (its solid walls: plain, and two that also register the wall) */
   {4, 0xB250, 0x94A2, 0x16990, 0x16A58, 0x16A80, 0x19FA8, 0x1100E, 0xE8A0, 0x8A20, 134,
    0x8C38, 0x8C3E, {0x8C42, 0x8C48, 0x8C56}, 0x8C64, 0x9068, {0xA570, 0xA396, 0xA61A, 0xA440},
    0x3B58, 0, 0xFFD46E, 0xFFD442, 0x1838A, 0xB41E, 0, 0xFFD45E, 4, {236, 150, 42, 58}, {99, 129, 94, 95},
    {{0xFF0DCC, 0xFF0E26, 8}, {0xFF0E26, 0xFF0E3C, 0x22}, {0xFF0E3C, 0xFF104A, 0x24}, {0xFF104A, 0xFF1088, 0x30},
     {0xFF1088, 0xFF11E8, 0x40}, {0xFF11E8, 0xFF121A, 0x4A}, {0xFF121A, 0xFF24E8, 0x4E}, {0xFF24E8, 0xFF2708, 0x2CA},
-    {0xFF2708, 0xFF7F41, 0x2C0}}},
+    {0xFF2708, 0xFF7F41, 0x2C0}},
+   0xD660, {40, -20, 45, -45, 60, 40}, 0, 0},
 };
 static const zt_game_t *G = &zt_games[0];
+static int game_id = 1;             /* the ROM patch's game id (2: Rev A with the mouse hack) */
 static uint32 zvars = 0xFF7740;     /* the ROM patch's variables (ZT_VARS) */
 #define ZV_CUR    (zvars + 0x0C)    /* x, y, angle, horizon of the last tick, as rendered */
 #define ZV_RONLY  (zvars + 0x22)    /* rendering a between-ticks frame */
@@ -174,6 +189,7 @@ static int prepare_rom(void)
   }
   for (G = NULL, i = 0; i < sizeof zt_games / sizeof zt_games[0]; i++)
     if (zt_games[i].id == (int)(id == 2 ? 1 : id)) G = &zt_games[i];          /* 2: Rev A with the mouse hack */
+  game_id = id;
   if (!org || !G)
   {
     G = &zt_games[0];
@@ -185,7 +201,7 @@ static int prepare_rom(void)
     zt_hd_after_init_pc = 1;                       /* older patch: the table ends at +52 */
   zt_hd_hook_pc[0] = G->render; zt_hd_hook_pc[1] = G->piece; zt_hd_hook_pc[2] = G->obj1; zt_hd_hook_pc[3] = G->obj2;
   zt_hd_hook_pc[4] = G->item; zt_hd_hook_pc[5] = G->spr; zt_hd_hook_pc[6] = G->edge; zt_hd_hook_pc[7] = G->proj;
-  zt_hd_hook_pc[8] = zt_hd_after_pc; zt_hd_hook_pc[9] = zt_hd_after_init_pc;
+  zt_hd_hook_pc[8] = zt_hd_after_pc; zt_hd_hook_pc[9] = zt_hd_after_init_pc; zt_hd_hook_pc[10] = G->move;
   /* cell type handlers (Rev A: $9226 dispatch table at $923A) */
   for (i = 0; i < 256; i++)
   {
@@ -214,6 +230,71 @@ static int prepare_rom(void)
   return 1;
 }
 
+/* ---------------------------------------------------------------- twin-stick controls
+   Once a logic tick the game's movement routine (Rev A $DAB8) turns the pad into targets: turn rate +-16
+   (Left/Right), forward 40 / back -20 (Up/Down; agent 3 45 / -35), strafe +-40 (A + Left/Right, and then no
+   walking); it eases the camera's turn rate and speeds toward them, turns and moves. A + Up jumps, A + Down
+   crouches. Underground and Beyond have other numbers (zt_game_t.spd) and Beyond its own turn easing; the
+   mouse hack strafes with Left/Right and turns by the mouse. Where the routine turns the camera (G->move)
+   this sets from the sticks: the turn rate itself (no easing in: the right stick turns at once), the
+   forward and strafe targets (together, scaled by how far the left stick is pushed). A alone jumps, L3
+   held crouches. With the sticks centred the game's own controls are untouched. */
+static void ram_ww(uint32 a, int v) { WRITE_BYTE(work_ram, a & 0xFFFF, (v >> 8) & 0xFF); WRITE_BYTE(work_ram, (a + 1) & 0xFFFF, v & 0xFF); }
+
+static int stick(unsigned index, double *x, double *y)   /* radial dead zone; 0..1 beyond it */
+{
+  const double DZ = 0.2;
+  double ax = zt_hd_analog(index, 0) / 32768.0, ay = zt_hd_analog(index, 1) / 32768.0, m = sqrt(ax * ax + ay * ay), k;
+  if (m <= DZ) { *x = *y = 0; return 0; }
+  k = ((m > 1 ? 1 : m) - DZ) / (1 - DZ) / m;
+  *x = ax * k; *y = ay * k;
+  return 1;
+}
+
+static void sticks_tick(void)
+{
+  static int turned, crouched, prev_a;
+  double lx, ly, rx, ry;
+  int walk, turn, pad, a, h;
+  if (!zt_hd_sticks || !zt_hd_analog) return;
+  if (live_w(RA(0xFF0DE2))) { turned = crouched = 0; return; }   /* dying: the game's own sequence */
+  walk = stick(0, &lx, &ly); turn = stick(1, &rx, &ry);
+  pad = READ_BYTE(work_ram, 0x002E);                       /* this tick's pad: Up Down Left Right B C A Start */
+  h = (int16)live_w(RA(0xFF0E1A));                         /* camera height: > 0 jumping, < 0 crouching */
+  if (walk)
+  {
+    int fast = live_w(RA(0xFF1030)) == 3;                  /* the agent */
+    int f = (int)lround(ly < 0 ? -ly * G->spd[fast ? 2 : 0] : ly * G->spd[fast ? 3 : 1]);
+    int st = (int)lround(lx * G->spd[4]);
+    if (h < 0) { f /= 2; st /= 2; }                        /* crouching: half speed, as the game does */
+    ram_ww(RA(0xFF0E84), f); ram_ww(RA(0xFF0E88), st);
+  }
+  if (turn)
+  {
+    double n = fabs(rx), c = 0.3 * n + 0.7 * n * n;        /* finer aim near the centre */
+    ram_ww(RA(0xFF0E7E), (int)lround((rx < 0 ? -c : c) * zt_hd_turn_speed));
+    turned = 1;
+  }
+  else if (turned) { ram_ww(RA(0xFF0E7E), 0); turned = 0; }   /* let go: stop at once */
+  a = (pad >> 6) & 1;
+  if (a && !prev_a && !(pad & 0x0F) && (!G->ctl_ptr || live_l(G->ctl_ptr) == G->ctl_classic))   /* A alone (A + a
+                                                              direction is the game's) */
+  {
+    if (h == 0 && !live_w(RA(0xFF0E20))) ram_ww(RA(0xFF0E20), 9);   /* on the ground: jump (its upward speed) */
+    else if (h < 0) ram_ww(RA(0xFF0E1C), 0);                      /* crouching: stand up */
+  }
+  prev_a = a;
+  if (zt_hd_joy && zt_hd_joy(14))                          /* L3: crouch (height target, hold time) */
+  {
+    ram_ww(RA(0xFF0E1C), -16); ram_ww(RA(0xFF0E24), 30); crouched = 1;
+  }
+  else if (crouched)
+  {
+    if ((int16)live_w(RA(0xFF0E1C)) == -16) ram_ww(RA(0xFF0E24), 1);   /* stand up next tick */
+    crouched = 0;
+  }
+}
+
 /* ---------------------------------------------------------------- 68k hooks */
 void zt_hd_hook(unsigned int pc, unsigned int *regs)
 {
@@ -221,6 +302,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   uint32 i;
   if (!zt_hd_enabled || !prepare_rom()) return;
   zt_hd_dbg[0]++;
+  if (pc == G->move) { sticks_tick(); return; }
   if (pc == G->render)                                /* render start */
   {
     if (live_w(ZV_RONLY)) return;                     /* between-ticks render: not a tick */
@@ -1901,6 +1983,19 @@ void zt_hd_pad(unsigned short *pad)
   static int prev_type = -1, prev_slot = -1, target = -1, t, presses;
   int slot = READ_BYTE(work_ram, RA(0xFF104A) & 0xFFFF), type, i;
   if (pad_hold) *pad = 0;                                             /* the menu just closed: see zt_hd_input */
+  else if (zt_hd_sticks && zt_hd_joy)
+  {
+    double x, y;
+    if (zt_hd_joy(13)) *pad |= INPUT_B;                               /* R2: fire */
+    if (zt_hd_joy(12)) *pad |= INPUT_C;                               /* L2: next weapon */
+    if (zt_hd_analog && !live_w(ZV_INGAME) && stick(0, &x, &y))       /* menus: the left stick is the D-pad */
+    {
+      if (y < -0.5) *pad |= INPUT_UP;
+      if (y > 0.5) *pad |= INPUT_DOWN;
+      if (x < -0.5) *pad |= INPUT_LEFT;
+      if (x > 0.5) *pad |= INPUT_RIGHT;
+    }
+  }
   if (!zt_hd_autoswitch || !live_w(ZV_INGAME) || slot > 4) { target = -1; prev_slot = -1; return; }
   type = SLOT_TYPE(slot);
   if (target < 0 && slot == prev_slot && prev_type && !type)       /* the current weapon just ran out */
@@ -1934,10 +2029,12 @@ static const float hud_list[] = {0, 1, 1.5f, 2, 2.5f, 3, 4};
 static const unsigned key_codes[] = {'g', 'j', 'k', 'l', 'm', 'n', 't', 'u', 'y', 'b', 'v', 9, '`'};
 static const char *key_names[] = {"G", "J", "K", "L", "M", "N", "T", "U", "Y", "B", "V", "Tab", "`"};
 #define NKEYS 13
-enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_MENUKEY, M_GAME, M_COUNT };
+enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_STICKS, M_TURN, M_MENUKEY, M_GAME, M_COUNT };
 static int menu_game = -1;           /* M_GAME's value: the game to switch to when the menu closes */
 static int menu_count(void) { return zt_hd_ngames > 1 ? M_COUNT : M_GAME; }   /* "Game" only with a choice */
 static const char *layout_names[] = {"HD only", "Side by side", "Top / bottom", "Switch with key"};
+static const int turn_list[] = {16, 24, 32, 40, 48};   /* angle units a tick; x 360 / 512 x 10 = degrees a second */
+static int idx_of_turn(void) { int i; for (i = 0; i < 5; i++) if (zt_hd_turn_speed == turn_list[i]) return i; return 2; }
 
 static int idx_of_res(void)
 {
@@ -1963,21 +2060,25 @@ static void value_text(int item, char *b, int n)
     case M_SKY: snprintf(b, n, "%s", zt_hd_sky_fill ? "Fill view height" : "Original band"); break;
     case M_SHADE: snprintf(b, n, "%s", zt_hd_smooth ? "Smooth" : "Dither (original)"); break;
     case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Enhanced" : zt_hd_sky_ext ? "Stars" : "Black"); break;
+    case M_STICKS: snprintf(b, n, "%s", zt_hd_sticks ? "Twin stick" : "Original"); break;
+    case M_TURN: snprintf(b, n, "%d deg/s%s", (zt_hd_turn_speed * 3600 + 256) / 512, zt_hd_turn_speed == 16 ? " (D-pad)" : ""); break;
     case M_MENUKEY: snprintf(b, n, "%s", key_names[idx_of_key(zt_hd_menu_key)]); break;
     case M_GAME: snprintf(b, n, "%s%s", zt_hd_games[menu_game < 0 ? zt_hd_game_cur : menu_game],
                           menu_game >= 0 && menu_game != zt_hd_game_cur ? " (on close)" : ""); break;
   }
 }
 static const char *item_names[] = {"Resolution", "Field of view", "Original screen", "Switch key", "HUD scale",
-                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Menu key", "Game"};
+                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Controls",
+                                   "Stick turn speed", "Menu key", "Game"};
 
 void zt_hd_save_cfg(void)
 {
   FILE *f;
   if (!zt_hd_cfg_path[0] || !(f = fopen(zt_hd_cfg_path, "w"))) return;
-  fprintf(f, "res=%dx%d\nfov=%g\nlayout=%d\ntoggle_key=%u\nhud=%g\nweapon=%d\nautoswitch=%d\nsky_fill=%d\nsky_ext=%d\nsmooth=%d\nmenu_key=%u\n",
+  fprintf(f, "res=%dx%d\nfov=%g\nlayout=%d\ntoggle_key=%u\nhud=%g\nweapon=%d\nautoswitch=%d\nsky_fill=%d\nsky_ext=%d\nsmooth=%d\nmenu_key=%u\n"
+          "sticks=%d\nturn=%d\n",
           zt_hd_w, zt_hd_h, zt_hd_fov, zt_hd_layout, zt_hd_toggle_key, zt_hd_ui_scale, zt_hd_weapon, zt_hd_autoswitch,
-          zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key);
+          zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key, zt_hd_sticks, zt_hd_turn_speed);
   fclose(f);
 }
 
@@ -1999,6 +2100,8 @@ void zt_hd_load_cfg(void)
     else if (sscanf(line, "smooth=%d", &a) == 1) zt_hd_smooth = a != 0;
     else if (sscanf(line, "sky_ext=%d", &a) == 1) zt_hd_sky_ext = a < 0 ? 0 : a > 2 ? 2 : a;
     else if (sscanf(line, "menu_key=%u", &u) == 1) zt_hd_menu_key = u;
+    else if (sscanf(line, "sticks=%d", &a) == 1) zt_hd_sticks = a != 0;
+    else if (sscanf(line, "turn=%d", &a) == 1 && a >= 8 && a <= 64) zt_hd_turn_speed = a;
   }
   fclose(f);
 }
@@ -2018,6 +2121,8 @@ static void menu_change(int item, int dir)
     case M_SKY: zt_hd_sky_fill = !zt_hd_sky_fill; break;
     case M_SHADE: zt_hd_smooth = !zt_hd_smooth; break;
     case M_SKYEXT: zt_hd_sky_ext = (zt_hd_sky_ext + dir + 3) % 3; planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0; break;
+    case M_STICKS: zt_hd_sticks = !zt_hd_sticks; break;
+    case M_TURN: zt_hd_turn_speed = turn_list[(idx_of_turn() + dir + 5) % 5]; break;
     case M_MENUKEY: zt_hd_menu_key = key_codes[(idx_of_key(zt_hd_menu_key) + dir + NKEYS) % NKEYS]; break;
     case M_GAME:
       if (menu_game < 0) menu_game = zt_hd_game_cur;
@@ -2062,7 +2167,7 @@ int zt_hd_input(void)
   }
   if (!menu_open)
   {
-    if (pad_hold && !any && !(zt_hd_joy && (zt_hd_joy(9) || zt_hd_joy(1) || zt_hd_joy(3) || zt_hd_joy(2)))) pad_hold = 0;   /* X, Y, Start, Select too */
+    if (pad_hold && !any && !(zt_hd_joy && (zt_hd_joy(9) || zt_hd_joy(1) || zt_hd_joy(3) || zt_hd_joy(2) || zt_hd_joy(12) || zt_hd_joy(13)))) pad_hold = 0;   /* X, Y, Start, Select, L2, R2 too */
     if (hit[K_TOGGLE] && zt_hd_layout == 3) show_original = !show_original;
     return 0;
   }
@@ -2147,7 +2252,7 @@ void zt_hd_rom_changed(void)
 {
   int i;
   free(rom_be); rom_be = NULL; G = &zt_games[0];
-  for (i = 0; i < 10; i++) zt_hd_hook_pc[i] = 1;
+  for (i = 0; i < 11; i++) zt_hd_hook_pc[i] = 1;
   zt_hd_after_pc = 0; zt_hd_after_init_pc = 1;
   memset(snaps, 0, sizeof snaps); building = 0;
   memset(sky_known, 0, sizeof sky_known); planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0;

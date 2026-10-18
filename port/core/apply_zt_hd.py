@@ -28,7 +28,7 @@ patch("core/vdp_render.c", "static PIXEL_OUT_T pixel[0x100];",
 
 # 68k hooks (render start, sprite pieces and their anchors, edge pass, sprite projection, render end; the
 # game's addresses, set by zt_hd.c); an older build's hook line is updated in place
-HOOK = ("    if (zt_hd_enabled && (" + " || ".join("REG_PC == zt_hd_hook_pc[%d]" % i for i in range(10)) + "))\n")
+HOOK = ("    if (zt_hd_enabled && (" + " || ".join("REG_PC == zt_hd_hook_pc[%d]" % i for i in range(11)) + "))\n")
 _m = G / "core/m68k/m68kcpu.c"; _s = _m.read_text()
 _s = re.sub(r"    if \(zt_hd_enabled && \(REG_PC == (0xB9A6|zt_hd_hook_pc)[^\n]*\n", lambda _: HOOK, _s)
 _m.write_text(_s)
@@ -42,7 +42,7 @@ patch("core/m68k/m68kcpu.c", '#include "m68kcpu.h"', '#include "m68kcpu.h"\n#inc
 L = "libretro/libretro.c"
 patch(L, '#include "libretro_core_options.h"', '#include "libretro_core_options.h"\n#include "zt_hd.h"')
 patch(L, '''static bool update_viewport(void)
-{''', '''static int zt_key_fn(unsigned k) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, k) : 0; }
+{''', done_if='static int zt_key_fn(', new='''static int zt_key_fn(unsigned k) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, k) : 0; }
 static int zt_joy_fn(unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, id) : 0; }
 static void zt_av_fn(void)
 {
@@ -400,4 +400,51 @@ patch(O, """      "enhanced"
 patch(L, """        fill_pathname_join(zt_hd_cfg_path, sd, "zt_hd.cfg", sizeof(zt_hd_cfg_path));""",
       """        fill_pathname_join(zt_hd_cfg_path, sd, "zt_hd.cfg", sizeof(zt_hd_cfg_path));
       strncpy(zt_hd_rom_dir, g_rom_dir, sizeof(zt_hd_rom_dir) - 1);""")
+# twin-stick controls: the analog sticks reach zt_hd.c (separate patches, like the sky one)
+patch(L, """static int zt_joy_fn(unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, id) : 0; }""",
+      """static int zt_joy_fn(unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, id) : 0; }
+static int zt_analog_fn(unsigned index, unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_ANALOG, index, id) : 0; }""")
+patch(L, """    if (var.value) zt_hd_smooth = strcmp(var.value, "dither") != 0;""",
+      """    if (var.value) zt_hd_smooth = strcmp(var.value, "dither") != 0;
+    var.key = "genesis_plus_gx_zt_hd_sticks"; var.value = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+    if (var.value) zt_hd_sticks = strcmp(var.value, "off") != 0;
+    var.key = "genesis_plus_gx_zt_hd_turn"; var.value = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+    if (var.value) zt_hd_turn_speed = atoi(var.value);
+    zt_hd_analog = zt_analog_fn;""")
+patch(O, """      "smooth"
+   },""", """      "smooth"
+   },
+   {
+      "genesis_plus_gx_zt_hd_sticks",
+      "Zero Tolerance HD Twin-Stick Controls",
+      NULL,
+      "On: left stick walks and strafes (both at once, at any speed), right stick turns; A jumps, L3 crouches, R2 fires (B), L2 next weapon (C). The D-pad and buttons keep working as in the original. Off: the original controls only.",
+      NULL,
+      "hacks",
+      {
+         { "on",  "On" },
+         { "off", "Off (original)" },
+         { NULL, NULL },
+      },
+      "on"
+   },
+   {
+      "genesis_plus_gx_zt_hd_turn",
+      "Zero Tolerance HD Stick Turn Speed",
+      NULL,
+      "The right stick's fastest turn, in degrees per second (the D-pad turns at about 110).",
+      NULL,
+      "hacks",
+      {
+         { "16", "110 (D-pad)" },
+         { "24", "170" },
+         { "32", "225" },
+         { "40", "280" },
+         { "48", "340" },
+         { NULL, NULL },
+      },
+      "32"
+   },""")
 print("applied to", G)

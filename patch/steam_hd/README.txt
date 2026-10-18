@@ -30,8 +30,8 @@ Other games: Zero Tolerance: Underground and Beyond Zero Tolerance
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key, and the game
-        when there is a choice (see above).
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, controls, stick turn
+        speed, menu key, and the game when there is a choice (see above).
         Saved to zt_hd.cfg in the game folder.
   Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, D on the
         keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or C change,
@@ -39,6 +39,12 @@ In game
   Space fast forward while held (the frontend's Mode button; 4x, shown by a fast-forward sign at the top
         right; zt_fast_forward in ew_core_options.cfg sets the speed, 2-8, or 1 to turn it off).
   G     switch between the HD view and the original screen
+  Twin stick (on by default; "Controls" in the menu): left stick walks and strafes, both at once and as
+        fast as it is pushed; right stick turns ("Stick turn speed" in the menu). A on its own jumps (in
+        Underground only with its classic control setting, where A is otherwise unused), L3 held crouches,
+        RT fires (B), LT next weapon (C). The D-pad and the buttons keep their original functions. The
+        sticks, triggers and L3 are read from the first game controller directly (zt_hd_log.txt names
+        it).
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.
   The controller and keyboard buttons are the frontend's, as before.
