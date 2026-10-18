@@ -31,6 +31,7 @@
 ; VBL, FB_PENDING, FLASH, FLASH_MODE, CAM_X, CAM_Y, CAM_A, CAM_H, CAM_DX, CAM_DY, BOB, EXIT_FLAG, LIVES, FB
 ;                                   game variables (absolute; see games.py)
 ; ZT_VARS                           $40 bytes of RAM the game never uses, for ours
+; VRAM_RESTORE                      VDP command the VBlank leaves set (a VRAM write address)
 ; MOUSE_TAIL                        (mouse hack ROM only) its VBlank end
 
 VDP_CTRL        equ $C00004
@@ -102,6 +103,8 @@ SNAP_ANG        equ 96              ; angle jump (per tick) treated as teleport
         dc.w    GAME_ID                 ; +64 which game (games.py)
         dc.w    0                       ; +66
         dc.l    ZT_VARS                 ; +68 our variables
+        bra.w   ZT_SkyAngleA4           ; +72 Beyond's sky hook
+        bra.w   ZT_CellPop              ; +76 Beyond's floor-cell hook
 
 ; ---------------------------------------------------------------------------
 ; Hook at $162C (replaces "bsr $79A; bsr $D36"): run logic or render-only.
@@ -216,6 +219,16 @@ ZT_Cell:
 .skip:  move.w  BOB_W(a6),d0
         rts
 
+; Beyond (replaces "bsr CELL_LOGIC; move.w (sp)+,d0": the caller saved a word to compare after it)
+ZT_CellPop:
+        tst.w   ZT_RONLY(a6)
+        bne   .skip
+        jsr     CELL_LOGIC
+.skip:  move.w  4(sp),d0                ; the saved word, under our return address
+        move.l  (sp),2(sp)
+        addq.l  #2,sp
+        rts
+
 ; ---------------------------------------------------------------------------
 ; Hook at $1470 (replaces "move.w CAM_A(a6),d2; neg.w d2"): sky scroll angle.
 ; ---------------------------------------------------------------------------
@@ -225,6 +238,13 @@ ZT_SkyAngle:
         bne   .ok
         move.w  CAM_A_W(a6),d2
 .ok:    neg.w   d2
+        rts
+
+; Beyond (replaces "move.w CAM_A(a6),d2; movea.l #$C00000,a4"; its "neg.w d2" follows)
+ZT_SkyAngleA4:
+        bsr     ZT_SkyAngle
+        neg.w   d2
+        movea.l #VDP_DATA,a4
         rts
 
 ; ---------------------------------------------------------------------------
@@ -396,7 +416,7 @@ ZT_VBlankTail:
         movem.l (sp)+,d0/a0
         jmp     MOUSE_TAIL              ; mouse hack ROM: its VBlank end (restores the VRAM address, reads the mouse)
         else
-        move.l  #$73600002,(a0)         ; restore VRAM write address (as original)
+        move.l  #VRAM_RESTORE,(a0)      ; restore VRAM write address (as original)
         endif
 .out:   movem.l (sp)+,d0/a0
         rte
@@ -432,7 +452,7 @@ ZT_SplitDma:
         movem.l (sp)+,d0/a0
         jmp     MOUSE_TAIL
         else
-        move.l  #$73600002,(a0)
+        move.l  #VRAM_RESTORE,(a0)
         movem.l (sp)+,d0/a0
         rte
         endif
@@ -508,7 +528,7 @@ ZT_HInt:
         tst.w   ZT_DISP
         beq   .ign
         move.w  #$8164,VDP_CTRL         ; display on
-        move.l  #$73600002,VDP_CTRL
+        move.l  #VRAM_RESTORE,VDP_CTRL
 .ign:   move.w  (sp)+,d0
 .rte:   rte
 

@@ -23,6 +23,7 @@ REV_A = dict(
     EXIT_TGT=0x1A40,                         # main loop: level exit
     DEATH_TGT=0x17AE,                        # main loop: death, no lives left
     HINT_OLD=0x0BAC,                         # level 4 vector (an RTE)
+    VRAM_RESTORE=0x73600002,                 # VDP command the VBlank ends with
     # hook sites
     S_DECIDE=0x162C,                         # bsr INPUT_A; bsr INPUT_B
     S_LOGIC_RENDER=0x16CE,                   # jsr RENDER (logic block)
@@ -79,6 +80,25 @@ UNDERGROUND = derive(
     FLASH=0xFF1076, BOB=0xFF1172, EXIT_FLAG=0xFF2726, LIVES=0xFF24EC, FB=0xFF392A,
 )
 
+# Beyond Zero Tolerance (unreleased sequel, "Build: 062393a"). More rework: RAM mostly moved, the sky and
+# floor-cell hook sites are arranged differently (SKY_A4, CELL_POP), the logic block calls a new routine
+# ($B9B54, sets a mode word) before rendering.
+BEYOND = derive(
+    REV_A,
+    INPUT_B=0x0D4C, LOGIC_CONT=0x1692, SUBMIT=0x1464, HORIZON=0xCE32, RENDER=0xB250, RENDER_CALL=0xB250,
+    CELL_LOGIC=0xAB00, DIRTABLE=0x78EA, Z80_BUSREQ=0x6418A, Z80_BUSREL=0x641C8, EXIT_TGT=0x1A6E,
+    DEATH_TGT=0x1818, HINT_OLD=0x0BCC, VRAM_RESTORE=0x67800002,
+    S_DECIDE=0x168A, S_LOGIC_RENDER=0x1732, S_INIT_RENDER=0x1382, S_RESPAWN_RENDER=0x1992,
+    S_SKY=0x146A, SKY_A4=True,                # move.w CAM_A(a6),d2; movea.l #$C00000,a4; (neg.w d2)
+    S_CELL=0xB394, CELL_POP=True,             # (move.w x(a6),-(sp)); bsr CELL_LOGIC; move.w (sp)+,d0
+    S_VBLANK=0x0AE2, S_EXIT=0x179E, S_DEATH=0x17F2, S_SR_SOUND=0xD146, S_SR_LINK=0x1A31E,
+    S_SR_LINK_SAVE=0x1A318,
+    S_DISP_ON=[0x12D4, 0x13BE, 0x1682, 0x19CA, 0x2D66],
+    S_DISP_OFF=[0x112E, 0x1320, 0x189A, 0x2896, 0x2BA6],
+    FLASH=0xFF10A2, FLASH_MODE=0xFF0DEA, CAM_X=0xFF0DF4, CAM_Y=0xFF0DF6, CAM_A=0xFF0E0C, CAM_H=0xFF0E22,
+    CAM_DX=0xFF0E08, CAM_DY=0xFF0E0A, BOB=0xFF11AE, EXIT_FLAG=0xFF29E2, LIVES=0xFF27B2, FB=0xFF3BE6,
+)
+
 # id: written into the patch (the HD core reads it); file: the ROM's name in this repo's root
 GAMES = {
     "zt": dict(id=1, title="Zero Tolerance (Rev A)", file="Zero Tolerance (USA, Europe) (Rev A).gen",
@@ -90,4 +110,7 @@ GAMES = {
     "ztu": dict(id=3, title="Zero Tolerance: Underground", file="ZTU.bin",
                 sha1="9f8df85692bea0b794dbf6a5f4f3ee579840694a", org=0x1E0000, addr=UNDERGROUND,
                 out="ZTU (high fps).bin", ips="ZTU.ips"),
+    "bzt": dict(id=4, title="Beyond Zero Tolerance", file="BZT.BIN",
+                sha1="ab7791def9ad91c0f0870b1f928ceb13b76acb9c", org=0x270000, addr=BEYOND,
+                out="BZT (high fps).bin", ips="BZT.ips"),
 }

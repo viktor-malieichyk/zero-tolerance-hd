@@ -9,7 +9,7 @@ See zt_high_fps.asm for details. Supported ROMs and their addresses: games.py.
 Writes each patched ROM and an IPS patch next to this script.
 
   python3 make_patch.py [--hz 10] [GAME ...]       cartridge ROMs found in the repo root (all, or the GAMEs
-                                                   named: zt, zt_mouse, ztu), for RetroArch etc.
+                                                   named: zt, zt_mouse, ztu, bzt), for RetroArch etc.
   python3 make_patch.py --steam DIR [--hz 10]      Steam release (QUByte Classics), from its install DIR:
                                                    writes steam/res/game and steam/ew_core.dll to copy over
 """
@@ -26,6 +26,7 @@ TICK_HZ = 10                            # game logic rate; the original runs ~7-
 (DECIDE, LOGIC_RENDER, INIT_RENDER, SKY, CELL,
  VBLANK, HINT, DISP_ON, DISP_OFF, QDMA_ON, QDMA_OFF,
  EXIT_CHECK, DEATH_EXIT) = range(0, 52, 4)
+SKY_A4, CELL_POP = 72, 76               # Beyond's variants
 
 def w(*words):
     return b"".join(struct.pack(">H", x & 0xFFFF) for x in words)
@@ -47,9 +48,13 @@ def hooks(g, org):
         (g["S_LOGIC_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + LOGIC_RENDER)),  # render in logic block
         (g["S_INIT_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + INIT_RENDER)),    # level start render
         (g["S_RESPAWN_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + INIT_RENDER)), # respawn render
-        (g["S_SKY"], w(0x342E, a6(g["CAM_A"]), 0x4442), jsr(org + SKY)),      # sky scroll angle
-        (g["S_CELL"], bsr_w(g["S_CELL"], g["CELL_LOGIC"]) + w(0x302E, a6(g["BOB"])),
-         jsr(org + CELL) + NOP),                                              # floor-cell logic in RENDER
+        # sky scroll angle
+        (g["S_SKY"], w(0x342E, a6(g["CAM_A"]), 0x287C, 0x00C0, 0x0000), jsr(org + SKY_A4) + NOP + NOP)
+        if g.get("SKY_A4") else (g["S_SKY"], w(0x342E, a6(g["CAM_A"]), 0x4442), jsr(org + SKY)),
+        # floor-cell logic in RENDER
+        (g["S_CELL"], bsr_w(g["S_CELL"], g["CELL_LOGIC"]) + w(0x301F), jsr(org + CELL_POP))
+        if g.get("CELL_POP") else
+        (g["S_CELL"], bsr_w(g["S_CELL"], g["CELL_LOGIC"]) + w(0x302E, a6(g["BOB"])), jsr(org + CELL) + NOP),
         # VBlank: keep the counters, replace the framebuffer upload
         (g["S_VBLANK"], w(0x4A79) + struct.pack(">I", g["FB_PENDING"]), jmp(org + VBLANK)),
         # main loop exits (level exit, death): band off
@@ -86,7 +91,7 @@ STEAM_DLL_PATCHES = [  # (file offset, original, replacement)
 
 def assemble(game):
     g = game["addr"]
-    syms = {k: v for k, v in g.items() if isinstance(v, int) and not k.startswith("S_") and k not in ("HINT_OLD", "RENDER_CALL")}
+    syms = {k: v for k, v in g.items() if type(v) is int and not k.startswith("S_") and k not in ("HINT_OLD", "RENDER_CALL")}
     syms.update(ORG_ADDR=game["org"], GAME_ID=game["id"],
                 LOGIC_PERIOD_NTSC=round(60 / TICK_HZ), LOGIC_PERIOD_PAL=round(50 / TICK_HZ))
     vasm = str(VASM) if VASM.exists() else (shutil.which("vasmm68k_mot") or sys.exit("vasmm68k_mot not found: put it in tools/ or on PATH"))

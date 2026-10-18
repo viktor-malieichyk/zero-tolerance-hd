@@ -59,23 +59,36 @@ typedef struct {
   /* hooks: render start, edge pass, sprite projection, object draw (2), object sprite, map item, sprite piece */
   uint32 render, edge, proj, obj1, obj2, spr, item, piece;
   uint32 cell_tab; int ncell;                 /* cell type handler table, entries */
-  uint32 h_item, h_empty, h_solid, h_lvl, h_lift, door[4];   /* handlers: map item, empty, solid, multi-level
-                                                 walls [h_lvl, h_lift), lift shaft; doors (see door[]) */
+  uint32 h_item, h_empty, h_solid[3], h_lvl, h_lift, door[4];   /* handlers: map item, empty, solid walls,
+                                                 multi-level walls [h_lvl, h_lift), lift shaft; doors (door[]) */
   uint32 shaded;                              /* column routines by height (shaded walls) */
-  uint32 unshaded;                            /* sprite shade list: none */
+  uint32 unshaded;                            /* sprite shade list: none (Rev A: the list pointer's value) */
+  uint32 slist_ram, slist_unsh;               /* Beyond: the sprite shade list is in RAM, unshaded when its
+                                                 first entry equals the long at slist_unsh */
   uint32 blood;                               /* blood drop object type */
   uint32 empty_tab;                           /* per cell type: no floor edges */
-  uint32 tex_base, tex_ram;                   /* wall textures: fixed, or a pointer in RAM (Underground) */
-  ram_shift_t ram[4];                         /* Rev A RAM -> this game's, by range */
+  uint32 tex_base, tex_ram;                   /* wall textures: fixed, or a pointer in RAM */
+  int objd;                                   /* object fields from +$0E on are this much further (Beyond 4) */
+  int portrait[4];                            /* HUD: the ID card photo on the original screen (x, y, w, h) */
+  ram_shift_t ram[12];                        /* Rev A RAM -> this game's, by range */
 } zt_game_t;
 
 static const zt_game_t zt_games[] = {
+  /* Zero Tolerance (Rev A; also the mouse hack ROM) */
   {1, 0xB9A6, 0x9D72, 0x1329A, 0x13360, 0x13388, 0x1BCB4, 0x113EE, 0xEDA0, 0x923A, 133,
-   0x944E, 0x9454, 0x9458, 0x945E, 0x9862, {0xAF5E, 0xAD8C, 0xB000, 0xAE2E},
-   0x4392, 0xED50, 0x159FE, 0xBB90, 0x12EF26, 0, {{0}}},
+   0x944E, 0x9454, {0x9458, 0x9458, 0x9458}, 0x945E, 0x9862, {0xAF5E, 0xAD8C, 0xB000, 0xAE2E},
+   0x4392, 0xED50, 0, 0, 0x159FE, 0xBB90, 0x12EF26, 0, 0, {196, 132, 48, 64}, {{0}}},
+  /* Zero Tolerance: Underground */
   {3, 0xBC4C, 0x9FB0, 0x13C52, 0x13D18, 0x13D40, 0x1C680, 0x11866, 0xF218, 0x92FC, 228,
-   0x968C, 0x9692, 0x9696, 0x969C, 0x9AA0, {0xB19C, 0xAFCA, 0xB23E, 0xB06C},
-   0x4454, 0xF1C8, 0x163BE, 0xBE36, 0, 0xFF0E74, {{0xFF0E74, 0xFFF000, 4}}},
+   0x968C, 0x9692, {0x9696, 0x9696, 0x9696}, 0x969C, 0x9AA0, {0xB19C, 0xAFCA, 0xB23E, 0xB06C},
+   0x4454, 0xF1C8, 0, 0, 0x163BE, 0xBE36, 0, 0xFF0E74, 0, {196, 132, 48, 64}, {{0xFF0E74, 0xFFF000, 4}}},
+  /* Beyond Zero Tolerance (its solid walls: plain, and two that also register the wall) */
+  {4, 0xB250, 0x94A2, 0x16990, 0x16A58, 0x16A80, 0x19FA8, 0x1100E, 0xE8A0, 0x8A20, 134,
+   0x8C38, 0x8C3E, {0x8C42, 0x8C48, 0x8C56}, 0x8C64, 0x9068, {0xA570, 0xA396, 0xA61A, 0xA440},
+   0x3B58, 0, 0xFFD46E, 0xFFD442, 0x1838A, 0xB41E, 0, 0xFFD45E, 4, {236, 150, 42, 58},
+   {{0xFF0DCC, 0xFF0E26, 8}, {0xFF0E26, 0xFF0E3C, 0x22}, {0xFF0E3C, 0xFF104A, 0x24}, {0xFF104A, 0xFF1088, 0x30},
+    {0xFF1088, 0xFF11E8, 0x40}, {0xFF11E8, 0xFF121A, 0x4A}, {0xFF121A, 0xFF24E8, 0x4E}, {0xFF24E8, 0xFF2708, 0x2CA},
+    {0xFF2708, 0xFF7F41, 0x2C0}}},
 };
 static const zt_game_t *G = &zt_games[0];
 static uint32 zvars = 0xFF7740;     /* the ROM patch's variables (ZT_VARS) */
@@ -174,7 +187,7 @@ static int prepare_rom(void)
   {
     uint32 hnd = (int)i < G->ncell ? R32(G->cell_tab + i * 4) : G->h_empty;
     level_hnd[i] = (i >= 6 && hnd >= G->h_lvl && hnd < G->h_lift) ? hnd : (i >= 6 && hnd == G->h_lift) ? 1 : 0;
-    solid[i] = (i == 1) || (i >= 6 && hnd == G->h_solid) || level_hnd[i];
+    solid[i] = (i == 1) || (i >= 6 && (hnd == G->h_solid[0] || hnd == G->h_solid[1] || hnd == G->h_solid[2])) || level_hnd[i];
     item_type[i] = hnd == G->h_item;
     door[i] = (hnd == G->door[0]) ? 1 : (hnd == G->door[1]) ? 2 : (hnd == G->door[2]) ? 3 : (hnd == G->door[3]) ? 4 : 0;
   }
@@ -231,7 +244,8 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   else if ((pc == G->obj1 || pc == G->obj2) && building)   /* object draw routine: a0 = object */
   {
     anchor_id = regs[8] & 0xFFFFFF; anchor_type = 0; anchor_rec = 0;
-    anchor_x = live_w(anchor_id + 0x20); anchor_y = live_w(anchor_id + 0x22); anchor_z = live_w(anchor_id + 0x24);
+    anchor_x = live_w(anchor_id + 0x20 + G->objd); anchor_y = live_w(anchor_id + 0x22 + G->objd);
+    anchor_z = live_w(anchor_id + 0x24 + G->objd);
   }
   else if (pc == G->spr && building && anchor_id && !(anchor_id & 0x1000000))
   {
@@ -253,10 +267,12 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   else if (pc == G->piece && building)                  /* sprite piece: d1/d2 column/row, d4 x d0 size, a1 texels */
   {
     int16 h = regs[0], w = regs[4];
-    uint32 list = live_l(RA(0xFF1096)), shade;
+    uint32 list = G->slist_ram ? G->slist_ram : live_l(RA(0xFF1096)), shade;
     zt_hd_dbg[2]++;
     if (h <= 0 || w <= 0 || s->npc >= 256 || !anchor_id) return;
-    if (list == G->unshaded) shade = R32(G->unshaded);   /* unshaded */
+    if (G->slist_ram ? live_l(list) == live_l(G->slist_unsh) : list == G->unshaded)
+      list |= 1;                                      /* unshaded: the list's first entry (bit 0 marks it) */
+    if (list & 1) shade = (list & ~1) >= 0xFF0000 ? live_l(list & ~1) : R32(list & ~1);
     else
     {
       int d3 = ((int16)live_w(RA(0xFF1094)) >> 3) - 1;    /* the drawer's level from the scale; too far = not drawn */
@@ -722,7 +738,7 @@ static double piece_z(const snap_t *s, const snap_t *s0, int i, double t)
 static uint32 piece_shade(const snap_t *s, uint32 list, double sc)
 {
   int d3;
-  if (list == G->unshaded) return R32(G->unshaded);
+  if (list & 1) return (list & ~1) >= 0xFF0000 ? M32(s, list & ~1) : R32(list & ~1);   /* unshaded */
   d3 = ((int)sc >> 3) - 1;
   if (d3 < 0) return 0;
   d3 = 4 - d3; if (d3 < 0) d3 = 0;
@@ -852,14 +868,14 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
       p->du = x0 + s->pc[i].gc * pwu; p->pw = pwu;
       p->dv = -piece_z(s, s0, i, t) / 64.0 + y0 + s->pc[i].gr * phu; p->ph = phu;
     }
-    else if (!s->pc[i].type && !(s->pc[i].obj & 0x1000000) && M32(s, s->pc[i].obj + 0x0E) == G->blood)
+    else if (!s->pc[i].type && !(s->pc[i].obj & 0x1000000) && M32(s, s->pc[i].obj + 0x0E + G->objd) == G->blood)
     {
       /* blood drops ($159FE): state +$34, stretch k = +$35, scale s, rows from the object's row
          ((horizon - bob - z) * s / 64 + 40). 0: droplet s/8 x s/4, centred, raised s/8; 1: splat
          s*(256-k)/4096 wide, s*(256+k)/2048 tall, centred, hanging from the row; else s*(k+128)/1024 wide,
          s*(256-k)/4096 tall, centred both ways. Exact instead of rounded; the height is interpolated. */
       uint32 o = s->pc[i].obj;
-      int st = M8(s, o + 0x34), k = M8(s, o + 0x35);
+      int st = M8(s, o + 0x34 + G->objd), k = M8(s, o + 0x35 + G->objd);
       double zz = -piece_z(s, s0, i, t) / 64.0;
       if (st == 0)      { p->pw = 1 / 8.0; p->ph = 1 / 4.0; p->dv = zz - 1 / 8.0; }
       else if (st == 1) { p->pw = (256 - k) / 4096.0; p->ph = (256 + k) / 2048.0; p->dv = zz; }
@@ -1731,7 +1747,7 @@ static void draw_hud(const uint16 *native, int npitch, int px, int py, int W, in
     hud_cache.nspan = nspan; hud_cache.px = px; hud_cache.py = py; hud_cache.W = W; hud_cache.H = H; hud_cache.ow = ow; hud_cache.u = hu.u;
   }
   /* what changes: the original's pieces, the counters, the ammo counts */
-  hud_native(196, 132, 48, 64, native, npitch, LX + 6, LY + 6, 60, 80);
+  hud_native(G->portrait[0], G->portrait[1], G->portrait[2], G->portrait[3], native, npitch, LX + 6, LY + 6, 60, 80);
   {
     int bb[4], dw = counter_box(native, npitch, 295, 71, 18, 10, bb) ? (bb[2] - bb[0]) * 2 : 0;
     cw = 14 + 5 + dw; cx = LX + 6 + (60 - cw) / 2; cy = hy + 10;
