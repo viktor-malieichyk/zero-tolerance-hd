@@ -36,6 +36,9 @@ int (*zt_hd_joy)(unsigned id);       /* set by libretro.c: is pad 1's button (li
 void (*zt_hd_av_changed)(void);      /* set by libretro.c: output size changed */
 char zt_hd_cfg_path[1024];           /* settings file written by the in-game menu */
 char zt_hd_rom_dir[1024];            /* the game's folder: second place for the sky PNG */
+const char *zt_hd_games[8];          /* set by a frontend that can switch games (Steam): their names, */
+int zt_hd_ngames, zt_hd_game_cur;    /* how many, and the one running; the menu then offers "Game" */
+int zt_hd_game_req = -1;             /* the game picked in the menu, applied by the frontend (-1 none) */
 static int show_original;            /* layout 3: currently showing the original screen */
 static int menu_open, menu_sel;
 static int rw, rh;                  /* current render panel size */
@@ -1931,7 +1934,9 @@ static const float hud_list[] = {0, 1, 1.5f, 2, 2.5f, 3, 4};
 static const unsigned key_codes[] = {'g', 'j', 'k', 'l', 'm', 'n', 't', 'u', 'y', 'b', 'v', 9, '`'};
 static const char *key_names[] = {"G", "J", "K", "L", "M", "N", "T", "U", "Y", "B", "V", "Tab", "`"};
 #define NKEYS 13
-enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_MENUKEY, M_COUNT };
+enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_MENUKEY, M_GAME, M_COUNT };
+static int menu_game = -1;           /* M_GAME's value: the game to switch to when the menu closes */
+static int menu_count(void) { return zt_hd_ngames > 1 ? M_COUNT : M_GAME; }   /* "Game" only with a choice */
 static const char *layout_names[] = {"HD only", "Side by side", "Top / bottom", "Switch with key"};
 
 static int idx_of_res(void)
@@ -1959,10 +1964,12 @@ static void value_text(int item, char *b, int n)
     case M_SHADE: snprintf(b, n, "%s", zt_hd_smooth ? "Smooth" : "Dither (original)"); break;
     case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Enhanced" : zt_hd_sky_ext ? "Stars" : "Black"); break;
     case M_MENUKEY: snprintf(b, n, "%s", key_names[idx_of_key(zt_hd_menu_key)]); break;
+    case M_GAME: snprintf(b, n, "%s%s", zt_hd_games[menu_game < 0 ? zt_hd_game_cur : menu_game],
+                          menu_game >= 0 && menu_game != zt_hd_game_cur ? " (on close)" : ""); break;
   }
 }
 static const char *item_names[] = {"Resolution", "Field of view", "Original screen", "Switch key", "HUD scale",
-                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Menu key"};
+                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Menu key", "Game"};
 
 void zt_hd_save_cfg(void)
 {
@@ -2012,6 +2019,10 @@ static void menu_change(int item, int dir)
     case M_SHADE: zt_hd_smooth = !zt_hd_smooth; break;
     case M_SKYEXT: zt_hd_sky_ext = (zt_hd_sky_ext + dir + 3) % 3; planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0; break;
     case M_MENUKEY: zt_hd_menu_key = key_codes[(idx_of_key(zt_hd_menu_key) + dir + NKEYS) % NKEYS]; break;
+    case M_GAME:
+      if (menu_game < 0) menu_game = zt_hd_game_cur;
+      menu_game = (menu_game + dir + zt_hd_ngames) % zt_hd_ngames;
+      return;                                  /* a frontend choice, not a setting */
   }
   zt_hd_save_cfg();
   if (size_change && zt_hd_av_changed) zt_hd_av_changed();
@@ -2042,7 +2053,12 @@ int zt_hd_input(void)
   if (hit[K_MENU] || hit[J_MENU] || (menu_open && hit[J_B]))
   {
     menu_open = !menu_open;
-    if (!menu_open) pad_hold = 1;
+    if (!menu_open)
+    {
+      pad_hold = 1;
+      if (menu_game >= 0 && menu_game != zt_hd_game_cur) zt_hd_game_req = menu_game;   /* switch game now */
+      menu_game = -1;
+    }
   }
   if (!menu_open)
   {
@@ -2050,8 +2066,9 @@ int zt_hd_input(void)
     if (hit[K_TOGGLE] && zt_hd_layout == 3) show_original = !show_original;
     return 0;
   }
-  if (hit[K_UP] || hit[J_UP]) menu_sel = (menu_sel + M_COUNT - 1) % M_COUNT;
-  if (hit[K_DOWN] || hit[J_DOWN]) menu_sel = (menu_sel + 1) % M_COUNT;
+  if (menu_sel >= menu_count()) menu_sel = 0;
+  if (hit[K_UP] || hit[J_UP]) menu_sel = (menu_sel + menu_count() - 1) % menu_count();
+  if (hit[K_DOWN] || hit[J_DOWN]) menu_sel = (menu_sel + 1) % menu_count();
   if (hit[K_LEFT] || hit[J_LEFT]) menu_change(menu_sel, -1);
   if (hit[K_RIGHT] || hit[J_RIGHT] || hit[J_A]) menu_change(menu_sel, +1);
   return 1;
@@ -2076,15 +2093,15 @@ static void text(int x, int y, const char *str, int ts, uint16 col)
 
 static void draw_menu(void)
 {
-  int ts = oh >= 720 ? 2 : 1, lh = 16 * ts, bw = 46 * 8 * ts, bh = (M_COUNT + 6) * lh, bx = (ow - bw) / 2, by = (oh - bh) / 2;
-  int i, x, y;
+  int nm = menu_count(), ts = oh >= 720 ? 2 : 1, lh = 16 * ts, bw = 54 * 8 * ts, bh = (nm + 6) * lh;
+  int bx = (ow - bw) / 2, by = (oh - bh) / 2, i, x, y;
   char b[64];
   for (y = by; y < by + bh && y < oh; y++)          /* darkened box */
     for (x = bx; x < bx + bw && x < ow; x++)
       if (y >= 0 && x >= 0) { uint16 p = hd[y * ow + x]; hd[y * ow + x] = (p >> 2) & 0x39E7; }
   for (x = bx; x < bx + bw; x++) { if (by >= 0) hd[by * ow + x] = 0xFFE0; if (by + bh - 1 < oh) hd[(by + bh - 1) * ow + x] = 0xFFE0; }
   text(bx + 2 * 8 * ts, by + lh / 2, "ZERO TOLERANCE HD RENDERER", ts, 0xFFE0);
-  for (i = 0; i < M_COUNT; i++)
+  for (i = 0; i < nm; i++)
   {
     uint16 col = i == menu_sel ? 0xFFFF : 0x9CF3;
     value_text(i, b, sizeof b);
@@ -2095,8 +2112,8 @@ static void draw_menu(void)
     text(bx + 23 * 8 * ts + (int)strlen(b) * 8 * ts + 8 * ts, by + (i + 2) * lh, i == menu_sel ? ">" : " ", ts, col);
   }
   snprintf(b, sizeof b, "Up/Down select, Left/Right change, %s close", key_names[idx_of_key(zt_hd_menu_key)]);
-  text(bx + 2 * 8 * ts, by + (M_COUNT + 3) * lh, b, ts, 0x7BEF);
-  text(bx + 2 * 8 * ts, by + (M_COUNT + 4) * lh, "Pad: Z open/close, D-pad, C change, B close", ts, 0x7BEF);
+  text(bx + 2 * 8 * ts, by + (nm + 3) * lh, b, ts, 0x7BEF);
+  text(bx + 2 * 8 * ts, by + (nm + 4) * lh, "Pad: Z open/close, D-pad, C change, B close", ts, 0x7BEF);
 }
 
 /* Compose the output frame. native: the emulator's RGB565 frame (pitch in pixels).
@@ -2123,4 +2140,16 @@ uint16 *zt_hd_compose(const uint16 *native, int npitch, int nw, int nh)
   else panel_native(native, npitch, nw, nh, 0, 0, ow, oh);
   if (menu_open) draw_menu();
   return hd;
+}
+
+/* The frontend loads another ROM (another game): forget everything taken from the old one. */
+void zt_hd_rom_changed(void)
+{
+  int i;
+  free(rom_be); rom_be = NULL; G = &zt_games[0];
+  for (i = 0; i < 10; i++) zt_hd_hook_pc[i] = 1;
+  zt_hd_after_pc = 0; zt_hd_after_init_pc = 1;
+  memset(snaps, 0, sizeof snaps); building = 0;
+  memset(sky_known, 0, sizeof sky_known); planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0;
+  menu_open = 0; menu_game = -1; zt_hd_game_req = -1;
 }

@@ -2,14 +2,28 @@
 # Build ew_core.dll (32-bit Windows) for the Steam release: Genesis Plus GX + Zero Tolerance HD renderer
 # behind the Steam frontend's ew_* interface, with the ROM patch built in (applied in memory to the
 # game's untouched res/game). Needs mingw-w64 (i686-w64-mingw32-gcc), vasm (see the top-level README),
-# a clean Genesis-Plus-GX checkout and the Steam game folder:
+# a clean Genesis-Plus-GX checkout and the Steam game folder. The ROMs of the other supported games in this
+# repo's root (patch/games.py) are built in as patches too, so the DLL can switch to them (in-game menu, Game)
+# when a player puts those ROMs in the Steam game folder:
 #   sh build_steam.sh <Genesis-Plus-GX dir> <Steam game folder>
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 G=$(cd "$1" && pwd)
 STEAM=$(cd "$2" && pwd)
-python3 "$HERE/../../../patch/make_patch.py" --steam "$STEAM"
-python3 "$HERE/gen_ips_header.py" "$STEAM" "$HERE/../../../patch/steam/zt_high_fps_steam.ips" "$G/zt_steam_ips.h"
+P="$HERE/../../../patch"
+python3 "$P/make_patch.py" --steam "$STEAM"
+# the other games the DLL can switch to (Underground, Beyond...): the ROMs in this repo's root (games.py)
+python3 "$P/make_patch.py" || true
+# shellcheck disable=SC2046
+eval set -- $(cd "$P" && python3 -c '
+import shlex, pathlib, games
+args = []
+for key, g in games.GAMES.items():
+    rom, ips = pathlib.Path("..", g["file"]), pathlib.Path(g["ips"])
+    if rom.exists() and ips.exists():
+        args += [g["menu"], str(rom.resolve()), str(ips.resolve())]
+print(" ".join(shlex.quote(a) for a in args))')
+python3 "$HERE/gen_ips_header.py" "$G/zt_steam_ips.h" "Zero Tolerance" "$STEAM/res/game" "$P/steam/zt_high_fps_steam.ips" "$@"
 python3 "$HERE/../apply_zt_hd.py" "$G"
 cd "$G"
 # SSE2 floating point: the default x87 code made the HD renderer far too slow

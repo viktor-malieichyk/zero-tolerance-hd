@@ -121,7 +121,8 @@ def fix_checksum(rom):
     rom[0x18E:0x190] = struct.pack(">H", s)
 
 def ips(orig, new):
-    orig = orig + b"\xFF" * (len(new) - len(orig))     # a grown ROM: the new tail is written whole
+    grown = len(new) > len(orig)
+    orig = orig + b"\xFF" * (len(new) - len(orig))     # a grown ROM: its tail is FF-filled
     out, i = bytearray(b"PATCH"), 0
     while i < len(orig):
         if orig[i] != new[i]:
@@ -134,6 +135,8 @@ def ips(orig, new):
             i = j
         else:
             i += 1
+    if grown:                               # end with the last byte, so a patcher grows the ROM to its full size
+        out += struct.pack(">I", len(new) - 1)[1:] + struct.pack(">H", 1) + new[-1:]
     return bytes(out + b"EOF")
 
 def build_steam(steam_dir):

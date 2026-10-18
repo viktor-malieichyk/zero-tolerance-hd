@@ -22,7 +22,8 @@ No game data is included. You need your own copy of the game. Supported ROMs (`p
 | Zero Tolerance: Underground | `ZTU.bin` | `9f8df85692bea0b794dbf6a5f4f3ee579840694a` |
 | Beyond Zero Tolerance (unreleased sequel, build 062393a) | `BZT.BIN` | `ab7791def9ad91c0f0870b1f928ceb13b76acb9c` |
 
-The Steam drop-in supports the Steam release of the first game.
+The Steam drop-in runs the Steam release of the first game and switches to the others (in-game menu, Game)
+when their ROMs are in the game folder; they are recognised by size and CRC32, whatever they are called.
 
 ## Layout
 

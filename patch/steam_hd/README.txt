@@ -16,9 +16,22 @@ Install
   game runs as it is, without the HD view. A patched copy of the game is written to your temp folder at
   each start (zt_hd_game.md); nothing in the game folder is changed.
 
+Other games: Zero Tolerance: Underground and Beyond Zero Tolerance
+  Put your own copies of their ROMs in the game folder (or its res folder), named anything. They are
+  recognised by size and checksum (CRC32), not by name; files that don't match exactly are ignored. The
+  ROMs this works with:
+    Zero Tolerance: Underground          1955536 bytes  CRC32 E2288416
+    Beyond Zero Tolerance (062393a)      2537924 bytes  CRC32 EF2F803B
+    Zero Tolerance cartridge (Rev A)     2097152 bytes  CRC32 23F603F5
+    Zero Tolerance, Sega Mouse hack      2097152 bytes  CRC32 E52EF46C
+  When more than one game is found, the M menu has a "Game" line: pick one and close the menu to switch
+  (the game restarts). The choice is kept for the next start (zt_hd_game.cfg). Save states remember their
+  game and switch to it when loaded. zt_hd_log.txt lists the games found.
+
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key.
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, menu key, and the game
+        when there is a choice (see above).
         Saved to zt_hd.cfg in the game folder.
   Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, D on the
         keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or C change,

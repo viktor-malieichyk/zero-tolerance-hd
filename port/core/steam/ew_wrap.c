@@ -17,6 +17,8 @@
  *
  * The game's own res/game stays untouched: when it is the Steam release's ROM (CRC32 checked), the
  * high-fps/HD patch (zt_high_fps_steam.ips, built into this DLL) is applied in memory when it loads.
+ * Other supported games (Underground, Beyond...) found in the game folder by size and CRC32 can be switched
+ * to from the in-game menu (see "games" below).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -449,55 +451,196 @@ API void ew_core_shut(void)
   vdata = NULL;
 }
 
+/* ---------------------------------------------------------------- games
+   The patches built in (zt_steam_ips.h): [0] for the Steam release's res/game, then the other supported games.
+   A ROM is recognised by its size and CRC32 only, whatever its file is called: res/game, or any file in the
+   game folder or res\ (Underground, Beyond... the player's own copies). With more than one game found, the
+   in-game menu offers "Game"; the choice is kept in zt_hd_game.cfg (the ROM's CRC32). */
+extern const char *zt_hd_games[8];
+extern int zt_hd_ngames, zt_hd_game_cur, zt_hd_game_req;
+void zt_hd_rom_changed(void);
+static struct { int patch; char path[MAX_PATH]; } games[8];
+static int ngames, cur_game = -1;
+static void *rom_data;                     /* the running game's (patched) ROM: the core keeps a pointer */
+
 #ifdef ZT_STEAM_IPS
-/* apply the built-in IPS patch when the ROM is the Steam release's; verified by CRC32 afterwards */
-static int patch_rom(uint8_t *rom, size_t size)
+static int patch_of(const uint8_t *rom, size_t size)
 {
-  const uint8_t *p = zt_steam_ips + 5, *end = zt_steam_ips + sizeof zt_steam_ips;
-  uint8_t *orig;
-  if (size != ZT_ROM_SIZE || crc32(0, rom, size) != ZT_ROM_CRC) return 0;   /* not the Steam ROM: as is */
-  if (!(orig = malloc(size))) return 0;
-  memcpy(orig, rom, size);
+  int k;
+  uint32_t c = 0;
+  for (k = 0; k < ZT_NPATCHES; k++)
+    if (size == zt_rom_patches[k].size)
+    {
+      if (!c) c = crc32(0, rom, size);
+      if (c == zt_rom_patches[k].crc) return k;
+    }
+  return -1;
+}
+
+/* the patched ROM in a new buffer (grown ROMs are FF-filled), checked by CRC32; NULL if it doesn't match */
+static uint8_t *apply_patch(const uint8_t *rom, size_t size, int k)
+{
+  const zt_rom_patch_t *z = &zt_rom_patches[k];
+  const uint8_t *p = z->ips + 5, *end = z->ips + z->ips_size;
+  size_t n = z->patched_size;
+  uint8_t *out = malloc(n);
+  if (!out || size > n) { free(out); return NULL; }
+  memset(out, 0xFF, n);
+  memcpy(out, rom, size);
   while (p + 3 <= end && memcmp(p, "EOF", 3))
   {
-    uint32_t off = p[0] << 16 | p[1] << 8 | p[2], n = p[3] << 8 | p[4];
+    uint32_t off = p[0] << 16 | p[1] << 8 | p[2], len = p[3] << 8 | p[4];
     p += 5;
-    if (n) { if (off + n <= size && p + n <= end) memcpy(rom + off, p, n); p += n; }
-    else { uint32_t c = p[0] << 8 | p[1]; if (off + c <= size) memset(rom + off, p[2], c); p += 3; }
+    if (len) { if (off + len <= n && p + len <= end) memcpy(out + off, p, len); p += len; }
+    else { uint32_t c = p[0] << 8 | p[1]; if (off + c <= n) memset(out + off, p[2], c); p += 3; }
   }
-  if (crc32(0, rom, size) != ZT_PATCHED_CRC) { memcpy(rom, orig, size); free(orig); return 0; }   /* never half */
-  free(orig);
-  return 1;
+  if (crc32(0, out, n) != z->patched_crc) { free(out); return NULL; }   /* never half patched */
+  return out;
+}
+
+static uint8_t *read_file(const char *path, size_t *size)
+{
+  FILE *f = fopen(path, "rb");
+  long n;
+  uint8_t *d = NULL;
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+  if (n > 0 && (d = malloc(n)) && fread(d, 1, n, f) != (size_t)n) { free(d); d = NULL; }
+  fclose(f);
+  *size = n;
+  return d;
+}
+
+static int known_size(unsigned size)
+{
+  int k;
+  for (k = 0; k < ZT_NPATCHES; k++) if (size == zt_rom_patches[k].size) return 1;
+  return 0;
+}
+
+static void add_game(const char *path, int k)
+{
+  int i;
+  if (ngames == 8 || k < 0) return;
+  for (i = 0; i < ngames; i++) if (games[i].patch == k) return;   /* one of each */
+  games[ngames].patch = k;
+  snprintf(games[ngames].path, sizeof games[ngames].path, "%s", path);
+  zt_hd_games[ngames] = zt_rom_patches[k].name;
+  ngames++;
+}
+
+/* the frontend's ROM first, then every file of a known size and CRC32 in the game folder and res\ */
+static void find_games(const char *loaded)
+{
+  static const char *const sub[] = {"", "res\\"};
+  size_t size;
+  uint8_t *d = read_file(loaded, &size);
+  int s;
+  if (d) { add_game(loaded, patch_of(d, size)); free(d); }
+  for (s = 0; s < 2; s++)
+  {
+    char pat[MAX_PATH + 16], path[MAX_PATH + 300];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    snprintf(pat, sizeof pat, "%s%s*", dir, sub[s]);
+    if ((h = FindFirstFileA(pat, &fd)) == INVALID_HANDLE_VALUE) continue;
+    do
+    {
+      if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.nFileSizeHigh || !known_size(fd.nFileSizeLow)) continue;
+      snprintf(path, sizeof path, "%s%s%s", dir, sub[s], fd.cFileName);
+      if ((d = read_file(path, &size))) { add_game(path, patch_of(d, size)); free(d); }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+  }
+  zt_hd_ngames = ngames;
+  for (s = 0; s < ngames; s++) zlog("game %d: %s (%s)", s, zt_rom_patches[games[s].patch].name, games[s].path);
+}
+
+static void cfg_path(char *b, size_t n) { snprintf(b, n, "%szt_hd_game.cfg", dir); }
+
+static void save_choice(void)
+{
+  char path[MAX_PATH + 32];
+  FILE *f;
+  cfg_path(path, sizeof path);
+  if (cur_game >= 0 && (f = fopen(path, "w"))) { fprintf(f, "crc=%08X\n", zt_rom_patches[games[cur_game].patch].crc); fclose(f); }
+}
+
+static int saved_choice(void)
+{
+  char path[MAX_PATH + 32];
+  unsigned c;
+  int i, g = 0;
+  FILE *f;
+  cfg_path(path, sizeof path);
+  if ((f = fopen(path, "r")))
+  {
+    if (fscanf(f, "crc=%x", &c) == 1)
+      for (i = 0; i < ngames; i++) if (zt_rom_patches[games[i].patch].crc == c) g = i;
+    fclose(f);
+  }
+  return g;
+}
+
+/* load game g into the core (patched; the core loads content from a file path: the patched copy goes to the
+   temp folder) */
+static bool load_game(int g)
+{
+  struct retro_game_info gi;
+  static char tmp[MAX_PATH + 32];
+  size_t size;
+  uint8_t *rom = read_file(games[g].path, &size), *pat;
+  DWORD n;
+  FILE *t;
+  if (!rom) return false;
+  pat = patch_of(rom, size) == games[g].patch ? apply_patch(rom, size, games[g].patch) : NULL;
+  free(rom);
+  if (!pat) { zlog("game %d: patch failed", g); return false; }
+  size = zt_rom_patches[games[g].patch].patched_size;
+  memset(&gi, 0, sizeof gi);
+  gi.path = games[g].path;
+  n = GetTempPathA(MAX_PATH, tmp);
+  if (n && n < MAX_PATH)
+  {
+    strcat(tmp, "zt_hd_game.md");
+    if ((t = fopen(tmp, "wb")) && fwrite(pat, 1, size, t) == size && !fclose(t)) gi.path = tmp;
+  }
+  gi.data = pat; gi.size = size;
+  if (cur_game >= 0) { retro_unload_game(); zt_hd_rom_changed(); }
+  if (!retro_load_game(&gi)) { free(pat); zlog("game %d: load failed", g); return false; }
+  free(rom_data); rom_data = pat;
+  retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+  retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
+  cur_game = zt_hd_game_cur = g;
+  zlog("running game %d: %s", g, zt_rom_patches[games[g].patch].name);
+  return true;
+}
+
+/* a game picked in the menu: switch to it (and back to the old one if it fails) */
+static void switch_game(void)
+{
+  int g = zt_hd_game_req, old = cur_game;
+  zt_hd_game_req = -1;
+  if (g < 0 || g >= ngames || g == cur_game) return;
+  if (load_game(g)) save_choice();
+  else if (old >= 0) load_game(old);
 }
 #endif
 
 API bool ew_core_load(const char *filename)
 {
-  static void *data;
-  static size_t size;
   struct retro_game_info gi;
-  FILE *f = fopen(filename, "rb");
-  long n;
-  if (!f) return false;
-  fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
-  free(data); data = malloc(n); size = n;
-  if (!data || fread(data, 1, n, f) != (size_t)n) { fclose(f); return false; }
-  fclose(f);
+  size_t size;
 #ifdef ZT_STEAM_IPS
-  /* the core loads content from a file path: the patched copy goes to the temp folder */
-  {
-    static char tmp[MAX_PATH + 32];
-    FILE *t;
-    DWORD n2 = GetTempPathA(MAX_PATH, tmp);
-    if (n2 && n2 < MAX_PATH && patch_rom(data, size))
-    {
-      strcat(tmp, "zt_hd_game.md");
-      if ((t = fopen(tmp, "wb")) && fwrite(data, 1, size, t) == size && !fclose(t)) filename = tmp;
-    }
-  }
+  find_games(filename);
+  if (ngames && load_game(saved_choice())) return true;
+  if (ngames && load_game(0)) return true;
 #endif
+  /* not a ROM we patch: as is */
+  free(rom_data);
+  if (!(rom_data = read_file(filename, &size))) return false;
   memset(&gi, 0, sizeof gi);
-  gi.path = filename; gi.data = data; gi.size = size;
+  gi.path = filename; gi.data = rom_data; gi.size = size;
   if (!retro_load_game(&gi)) return false;
   retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
   retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
@@ -548,6 +691,9 @@ API void ew_core_emulate(void)
   const volatile unsigned char *st = frontend_stretch();
   int i, n;
   if (st) zt_hd_stretch_native = *st != 0;
+#ifdef ZT_STEAM_IPS
+  if (zt_hd_game_req >= 0) switch_game();
+#endif
   ff_active = ff_speed() > 1 && ((pad[0] >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1);
   n = ff_active ? ff_speed() : 1;
   for (i = 0; i < n; i++)
@@ -639,16 +785,24 @@ API void ew_button_set_state(int player, int id, bool state)
   if (state) pad[player] |= 1 << retro_id[id]; else pad[player] &= ~(1 << retro_id[id]);
 }
 
+/* Savestates end with "ZTGM", the game's ROM CRC32, "ZTGM", so a state loads into its own game (switching
+   to it first). States without it are the Steam ROM's. */
 API bool ew_state_save(const char *filename)
 {
   size_t n = retro_serialize_size();
-  void *b = malloc(n);
+  uint8_t *b = malloc(n + 12);
   FILE *f;
   bool ok = false;
-  if (b && retro_serialize(b, n) && (f = fopen(filename, "wb")))
+  if (b && retro_serialize(b, n))
   {
-    ok = fwrite(b, 1, n, f) == n;
-    fclose(f);
+#ifdef ZT_STEAM_IPS
+    if (cur_game >= 0)
+    {
+      uint32_t c = zt_rom_patches[games[cur_game].patch].crc;
+      memcpy(b + n, "ZTGM", 4); memcpy(b + n + 4, &c, 4); memcpy(b + n + 8, "ZTGM", 4); n += 12;
+    }
+#endif
+    if ((f = fopen(filename, "wb"))) { ok = fwrite(b, 1, n, f) == n; fclose(f); }
   }
   free(b);
   return ok;
@@ -658,12 +812,32 @@ API bool ew_state_load(const char *filename)
 {
   FILE *f = fopen(filename, "rb");
   long n;
-  void *b;
+  uint8_t *b;
   bool ok = false;
   if (!f) return false;
   fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
   b = malloc(n);
-  if (b && fread(b, 1, n, f) == (size_t)n) ok = retro_unserialize(b, n);
+  if (b && fread(b, 1, n, f) == (size_t)n)
+  {
+    ok = true;
+#ifdef ZT_STEAM_IPS
+    if (cur_game >= 0)
+    {
+      int g = -1, i;
+      if (n > 12 && !memcmp(b + n - 12, "ZTGM", 4) && !memcmp(b + n - 4, "ZTGM", 4))
+      {
+        uint32_t c;
+        memcpy(&c, b + n - 8, 4); n -= 12;
+        for (i = 0; i < ngames; i++) if (zt_rom_patches[games[i].patch].crc == c) g = i;
+      }
+      else
+        for (i = 0; i < ngames; i++) if (games[i].patch == 0) g = i;   /* an older state: the Steam ROM's */
+      if (g < 0) { zlog("state %s: its game isn't here", filename); ok = false; }
+      else if (g != cur_game) { zt_hd_game_req = g; switch_game(); ok = cur_game == g; }
+    }
+#endif
+    if (ok) ok = retro_unserialize(b, n);
+  }
   fclose(f);
   free(b);
   return ok;

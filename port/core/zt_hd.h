@@ -19,5 +19,8 @@ void zt_hd_load_cfg(void);
 void zt_hd_save_cfg(void);
 extern unsigned int zt_hd_after_pc, zt_hd_after_init_pc, zt_hd_hook_pc[10];
 void zt_hd_hook(unsigned int pc, unsigned int *regs);
+extern const char *zt_hd_games[8];
+extern int zt_hd_ngames, zt_hd_game_cur, zt_hd_game_req;
+void zt_hd_rom_changed(void);
 unsigned short *zt_hd_compose(const unsigned short *native, int npitch, int nw, int nh);
 #endif

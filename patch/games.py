@@ -99,18 +99,19 @@ BEYOND = derive(
     CAM_DX=0xFF0E08, CAM_DY=0xFF0E0A, BOB=0xFF11AE, EXIT_FLAG=0xFF29E2, LIVES=0xFF27B2, FB=0xFF3BE6,
 )
 
-# id: written into the patch (the HD core reads it); file: the ROM's name in this repo's root
+# id: written into the patch (the HD core reads it); file: the ROM's name in this repo's root; menu: its
+# name in the Steam DLL's game menu
 GAMES = {
-    "zt": dict(id=1, title="Zero Tolerance (Rev A)", file="Zero Tolerance (USA, Europe) (Rev A).gen",
+    "zt": dict(id=1, title="Zero Tolerance (Rev A)", menu="ZT cartridge", file="Zero Tolerance (USA, Europe) (Rev A).gen",
                sha1="d6d9733a619ba6be0dd76591d8dec621e4fdc17e", org=0x1D0000, addr=REV_A,
                out="Zero Tolerance (high fps).gen", ips="zt_high_fps.ips"),
-    "zt_mouse": dict(id=2, title="Zero Tolerance (Rev A, mouse hack)", file="ZT.bin",
+    "zt_mouse": dict(id=2, title="Zero Tolerance (Rev A, mouse hack)", menu="ZT mouse hack", file="ZT.bin",
                      sha1="e0dd42d65302c62904bbbe226efc68e2c71fdfab", org=0x1D0000, addr=MOUSE,
                      out="ZT (high fps).bin", ips="ZT.ips"),
-    "ztu": dict(id=3, title="Zero Tolerance: Underground", file="ZTU.bin",
+    "ztu": dict(id=3, title="Zero Tolerance: Underground", menu="Underground", file="ZTU.bin",
                 sha1="9f8df85692bea0b794dbf6a5f4f3ee579840694a", org=0x1E0000, addr=UNDERGROUND,
                 out="ZTU (high fps).bin", ips="ZTU.ips"),
-    "bzt": dict(id=4, title="Beyond Zero Tolerance", file="BZT.BIN",
+    "bzt": dict(id=4, title="Beyond Zero Tolerance", menu="Beyond", file="BZT.BIN",
                 sha1="ab7791def9ad91c0f0870b1f928ceb13b76acb9c", org=0x270000, addr=BEYOND,
                 out="BZT (high fps).bin", ips="BZT.ips"),
 }
