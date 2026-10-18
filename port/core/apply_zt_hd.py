@@ -26,12 +26,11 @@ shutil.copy(HERE / "zt_hud_font.h", G / "core" / "zt_hud_font.h")
 patch("core/vdp_render.c", "static PIXEL_OUT_T pixel[0x100];",
       "static PIXEL_OUT_T pixel[0x100];\nPIXEL_OUT_T zt_vdp_pixel(int index) { return pixel[index & 0xFF]; }")
 
-# 68k hooks (render start, sprite pieces and their anchors, edge pass, sprite projection, render end);
-# an older build's hook line is updated in place
-HOOK = ("    if (zt_hd_enabled && (REG_PC == 0xB9A6 || REG_PC == 0xEDA0 || REG_PC == 0x13360 || REG_PC == 0x13388 || "
-        "REG_PC == 0x113EE || REG_PC == 0x1BCB4 || REG_PC == 0x9D72 || REG_PC == 0x1329A || REG_PC == zt_hd_after_pc || REG_PC == zt_hd_after_init_pc))\n")
+# 68k hooks (render start, sprite pieces and their anchors, edge pass, sprite projection, render end; the
+# game's addresses, set by zt_hd.c); an older build's hook line is updated in place
+HOOK = ("    if (zt_hd_enabled && (" + " || ".join("REG_PC == zt_hd_hook_pc[%d]" % i for i in range(10)) + "))\n")
 _m = G / "core/m68k/m68kcpu.c"; _s = _m.read_text()
-_s = re.sub(r"    if \(zt_hd_enabled && \(REG_PC == 0xB9A6[^\n]*\n", lambda _: HOOK, _s)
+_s = re.sub(r"    if \(zt_hd_enabled && \(REG_PC == (0xB9A6|zt_hd_hook_pc)[^\n]*\n", lambda _: HOOK, _s)
 _m.write_text(_s)
 patch("core/m68k/m68kcpu.c", "    /* Decode next instruction */\n    REG_IR = m68ki_read_imm_16();\n\n    /* 68K bus access refresh delay (Mega Drive / Genesis specific) */",
       HOOK +

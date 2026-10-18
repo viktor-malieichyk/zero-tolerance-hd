@@ -1,69 +1,75 @@
 #!/usr/bin/env python3
-"""Zero Tolerance (USA, Europe) (Rev A) - high frame rate patch builder.
+"""Zero Tolerance - high frame rate patch builder.
 
 Assembles zt_high_fps.asm into free ROM space and hooks it into the game:
 fixed-rate logic with interpolated rendering, single-VBlank framebuffer DMA,
 and a constant blank band at the top of the screen during gameplay.
-See zt_high_fps.asm for details.
+See zt_high_fps.asm for details. Supported ROMs and their addresses: games.py.
 
-Writes the patched ROM and an IPS patch next to this script.
+Writes each patched ROM and an IPS patch next to this script.
 
-  python3 make_patch.py [--hz 10]                  cartridge ROM (Rev A) for RetroArch etc.
+  python3 make_patch.py [--hz 10] [GAME ...]       cartridge ROMs found in the repo root (all, or the GAMEs
+                                                   named: zt, zt_mouse, ztu), for RetroArch etc.
   python3 make_patch.py --steam DIR [--hz 10]      Steam release (QUByte Classics), from its install DIR:
                                                    writes steam/res/game and steam/ew_core.dll to copy over
 """
 import argparse, hashlib, shutil, struct, subprocess, sys, pathlib
+from games import GAMES
 
 HERE = pathlib.Path(__file__).resolve().parent
-SRC = HERE.parent / "Zero Tolerance (USA, Europe) (Rev A).gen"
-OUT = HERE / "Zero Tolerance (high fps).gen"
-IPS = HERE / "zt_high_fps.ips"
+ROOT = HERE.parent
 ASM = HERE / "zt_high_fps.asm"
 BIN = HERE / "zt_high_fps.bin"
 VASM = HERE / "tools" / "vasmm68k_mot"         # or vasmm68k_mot on PATH (http://sun.hasenbraten.de/vasm/)
-SHA1 = "d6d9733a619ba6be0dd76591d8dec621e4fdc17e"
-ORG = 0x1D0000                          # free (0xFF-filled) ROM space
-
+TICK_HZ = 10                            # game logic rate; the original runs ~7-11 fps in play
 # Entry points: the asm starts with a table of bra.w at 4-byte steps.
 (DECIDE, LOGIC_RENDER, INIT_RENDER, SKY, CELL,
  VBLANK, HINT, DISP_ON, DISP_OFF, QDMA_ON, QDMA_OFF,
- EXIT_CHECK, DEATH_EXIT) = (ORG + 4 * i for i in range(13))
-TICK_HZ = 10                            # game logic rate; the original runs ~7-11 fps in play
+ EXIT_CHECK, DEATH_EXIT) = range(0, 52, 4)
 
 def w(*words):
-    return b"".join(struct.pack(">H", x) for x in words)
+    return b"".join(struct.pack(">H", x & 0xFFFF) for x in words)
 
 def jsr(addr): return w(0x4EB9) + struct.pack(">I", addr)
 def jmp(addr): return w(0x4EF9) + struct.pack(">I", addr)
+def a6(addr): return addr - 0xFF8000            # a6-relative displacement
 NOP = w(0x4E71)
 
-DISP_ON_SITES = [0x134E, 0x1432, 0x1624, 0x199C, 0x2E3E]    # move.w #$8164,$C00004
-DISP_OFF_SITES = [0x11A6, 0x139A, 0x1830, 0x29DE, 0x2CF4]   # move.w #$8124,$C00004
-
-HOOKS = [  # (address, original bytes, replacement)
-    # main loop
-    (0x162C, w(0x6100, 0xF16C, 0x6100, 0xF704), jmp(DECIDE) + NOP),       # bsr $79A; bsr $D36
-    (0x16CE, jsr(0xB9A6), jsr(LOGIC_RENDER)),                             # render in logic block
-    (0x13F6, jsr(0xB9A6), jsr(INIT_RENDER)),                              # level start render
-    (0x1964, jsr(0xB9A6), jsr(INIT_RENDER)),                              # respawn render
-    (0x1470, w(0x342E, 0x8E04, 0x4442), jsr(SKY)),                        # sky scroll angle
-    (0xBAE6, w(0x6100, 0xF9FC, 0x302E, 0x916E), jsr(CELL) + NOP),         # floor-cell logic in RENDER
-    # VBlank: keep the counters at $AA2, replace the framebuffer upload
-    (0x0AC2, w(0x4A79, 0x00FF, 0x0002), jmp(VBLANK)),                     # tst.w $FF0002
-    # main loop exits (level exit, death): band off
-    (0x173A, w(0x4A6E, 0xA722, 0x6600, 0x0300), jsr(EXIT_CHECK) + NOP),
-    (0x1788, w(0x3E2E, 0xA4E8, 0x6720), jsr(DEATH_EXIT)),
-    # HUD DMA queue: don't end the band early
-    (0x07A4, w(0x33FC, 0x8174, 0x00C0, 0x0004), jsr(QDMA_ON) + NOP),
-    (0x07F6, w(0x33FC, 0x8164, 0x00C0, 0x0004), jsr(QDMA_OFF) + NOP),
-    # line interrupt vector, and let level 4 through (was $2500)
-    (0x0070, struct.pack(">I", 0xBAC), struct.pack(">I", HINT)),
-    (0x0A18, w(0x46FC, 0x2500), w(0x46FC, 0x2300)),                       # boot
-    (0xD7AE, w(0x46FC, 0x2500), w(0x46FC, 0x2300)),                       # after sound driver calls
-    (0x1C016, w(0x46FC, 0x2500), w(0x46FC, 0x2300)),                      # link cable off
-    (0x1C010, w(0x3D7C, 0x2500), w(0x3D7C, 0x2300)),                      # (stored copy of the above)
-] + [(a, w(0x33FC, 0x8164, 0x00C0, 0x0004), jsr(DISP_ON) + NOP) for a in DISP_ON_SITES] \
-  + [(a, w(0x33FC, 0x8124, 0x00C0, 0x0004), jsr(DISP_OFF) + NOP) for a in DISP_OFF_SITES]
+def hooks(g, org):
+    """(address, original bytes, replacement) for game addresses g, patch code at org"""
+    def bsr_w(site, target): return w(0x6100, target - site - 2)
+    def vdp_reg(v): return w(0x33FC, v, 0x00C0, 0x0004)                # move.w #v,$C00004
+    sr2500 = w(0x46FC, 0x2500)
+    h = [
+        # main loop
+        (g["S_DECIDE"], bsr_w(g["S_DECIDE"], g["INPUT_A"]) + bsr_w(g["S_DECIDE"] + 4, g["INPUT_B"]),
+         jmp(org + DECIDE) + NOP),
+        (g["S_LOGIC_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + LOGIC_RENDER)),  # render in logic block
+        (g["S_INIT_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + INIT_RENDER)),    # level start render
+        (g["S_RESPAWN_RENDER"], jsr(g["RENDER_CALL"]), jsr(org + INIT_RENDER)), # respawn render
+        (g["S_SKY"], w(0x342E, a6(g["CAM_A"]), 0x4442), jsr(org + SKY)),      # sky scroll angle
+        (g["S_CELL"], bsr_w(g["S_CELL"], g["CELL_LOGIC"]) + w(0x302E, a6(g["BOB"])),
+         jsr(org + CELL) + NOP),                                              # floor-cell logic in RENDER
+        # VBlank: keep the counters, replace the framebuffer upload
+        (g["S_VBLANK"], w(0x4A79) + struct.pack(">I", g["FB_PENDING"]), jmp(org + VBLANK)),
+        # main loop exits (level exit, death): band off
+        (g["S_EXIT"], w(0x4A6E, a6(g["EXIT_FLAG"]), 0x6600, g["EXIT_TGT"] - g["S_EXIT"] - 6),
+         jsr(org + EXIT_CHECK) + NOP),
+        (g["S_DEATH"], w(0x3E2E, a6(g["LIVES"]), 0x6700 | (g["DEATH_TGT"] - g["S_DEATH"] - 6)),
+         jsr(org + DEATH_EXIT)),
+        # HUD DMA queue: don't end the band early
+        (g["S_QDMA_ON"], vdp_reg(0x8174), jsr(org + QDMA_ON) + NOP),
+        (g["S_QDMA_OFF"], vdp_reg(0x8164), jsr(org + QDMA_OFF) + NOP),
+        # line interrupt vector, and let level 4 through (was $2500)
+        (0x0070, struct.pack(">I", g["HINT_OLD"]), struct.pack(">I", org + HINT)),
+        (g["S_SR_BOOT"], sr2500, w(0x46FC, 0x2300)),                          # boot
+        (g["S_SR_SOUND"], sr2500, w(0x46FC, 0x2300)),                         # after sound driver calls
+        (g["S_SR_LINK"], sr2500, w(0x46FC, 0x2300)),                          # link cable off
+        (g["S_SR_LINK_SAVE"], w(0x3D7C, 0x2500), w(0x3D7C, 0x2300)),          # (stored copy of the above)
+    ]
+    h += [(a, vdp_reg(0x8164), jsr(org + DISP_ON) + NOP) for a in g["S_DISP_ON"]]
+    h += [(a, vdp_reg(0x8124), jsr(org + DISP_OFF) + NOP) for a in g["S_DISP_OFF"]]
+    return h
 
 # Steam release (QUByte Classics: Zero Tolerance Collection). Its ROM is Rev A plus QUByte changes,
 # including a 15 fps limiter at the main loop top; its emulator (ew_core.dll, Mednafen MD) has a
@@ -78,19 +84,29 @@ STEAM_DLL_PATCHES = [  # (file offset, original, replacement)
     (0x4E61, b"\xB9\x03\x00\x00\x00", b"\xB9\x01\x00\x00\x00"),  # -turbo divider 3 -> 1
 ]
 
-def assemble():
-    periods = ["-DLOGIC_PERIOD_NTSC=%d" % round(60 / TICK_HZ), "-DLOGIC_PERIOD_PAL=%d" % round(50 / TICK_HZ)]
+def assemble(game):
+    g = game["addr"]
+    syms = {k: v for k, v in g.items() if isinstance(v, int) and not k.startswith("S_") and k not in ("HINT_OLD", "RENDER_CALL")}
+    syms.update(ORG_ADDR=game["org"], GAME_ID=game["id"],
+                LOGIC_PERIOD_NTSC=round(60 / TICK_HZ), LOGIC_PERIOD_PAL=round(50 / TICK_HZ))
     vasm = str(VASM) if VASM.exists() else (shutil.which("vasmm68k_mot") or sys.exit("vasmm68k_mot not found: put it in tools/ or on PATH"))
-    subprocess.run([vasm, "-quiet", "-Fbin", "-m68000", *periods, "-o", str(BIN), str(ASM)], check=True)
+    subprocess.run([vasm, "-quiet", "-Fbin", "-m68000", *("-D%s=%d" % kv for kv in syms.items()),
+                    "-o", str(BIN), str(ASM)], check=True)
     return BIN.read_bytes()
 
-def build(rom, extra_hooks=()):
+def build(rom, game, extra_hooks=()):
+    org = game["org"]
     out = bytearray(rom)
-    code = assemble()
-    assert all(b == 0xFF for b in out[ORG:ORG + len(code)]), "target ROM space not free"
-    out[ORG:ORG + len(code)] = code
-    for addr, orig, new in HOOKS + list(extra_hooks):
-        assert out[addr:addr + len(orig)] == orig, "unexpected bytes at %#x" % addr
+    if len(out) < org:                  # the code goes past the end: pad to a whole number of 128 KB
+        out += b"\xFF" * (org - len(out))
+    code = assemble(game)
+    size = max(len(out), org + len(code))
+    out += b"\xFF" * (((size + 0x1FFFF) & ~0x1FFFF) - len(out))
+    assert all(b == 0xFF for b in out[org:org + len(code)]), "target ROM space not free"
+    out[org:org + len(code)] = code
+    for addr, orig, new in hooks(game["addr"], org) + list(extra_hooks):
+        assert out[addr:addr + len(orig)] == orig, "unexpected bytes at %#x: %s, expected %s" % (
+            addr, out[addr:addr + len(orig)].hex(), orig.hex())
         assert len(new) == len(orig)
         out[addr:addr + len(new)] = new
     return out
@@ -100,12 +116,15 @@ def fix_checksum(rom):
     rom[0x18E:0x190] = struct.pack(">H", s)
 
 def ips(orig, new):
+    orig = orig + b"\xFF" * (len(new) - len(orig))     # a grown ROM: the new tail is written whole
     out, i = bytearray(b"PATCH"), 0
     while i < len(orig):
         if orig[i] != new[i]:
             j = i
             while j < len(orig) and orig[j] != new[j] and j - i < 0xFFFF:
                 j += 1
+            if i == 0x454F46:               # "EOF" as an offset would end the patch: start one byte earlier
+                i -= 1
             out += struct.pack(">I", i)[1:] + struct.pack(">H", j - i) + new[i:j]
             i = j
         else:
@@ -120,7 +139,7 @@ def build_steam(steam_dir):
         sys.exit("unexpected Steam res/game (sha1 %s)" % STEAM_ROM_SHA1)
     if hashlib.sha1(dll).hexdigest() != STEAM_DLL_SHA1:
         sys.exit("unexpected Steam ew_core.dll (sha1 %s)" % STEAM_DLL_SHA1)
-    new = build(rom, STEAM_ROM_HOOKS)
+    new = build(rom, GAMES["zt"], STEAM_ROM_HOOKS)
     fix_checksum(new)
     new_dll = bytearray(dll)
     for off, orig, rep in STEAM_DLL_PATCHES:
@@ -137,16 +156,31 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--hz", type=float, default=TICK_HZ, help="game logic rate (default %(default)s)")
     ap.add_argument("--steam", metavar="DIR", help="build for the Steam release installed in DIR")
+    ap.add_argument("games", nargs="*", metavar="GAME", help="games to build: %s (default: all found)" % ", ".join(GAMES))
     args = ap.parse_args()
+    for key in args.games:
+        if key not in GAMES:
+            ap.error("unknown game %s" % key)
     TICK_HZ = args.hz
     if args.steam:
         build_steam(args.steam)
         sys.exit(0)
-    rom = SRC.read_bytes()
-    if hashlib.sha1(rom).hexdigest() != SHA1:
-        sys.exit("unexpected ROM (need Rev A, sha1 %s)" % SHA1)
-    new = build(rom)
-    fix_checksum(new)
-    OUT.write_bytes(new)
-    IPS.write_bytes(ips(rom, new))
-    print("wrote", OUT.name, "and", IPS.name)
+    built = 0
+    for key in args.games or GAMES:
+        game = GAMES[key]
+        src = ROOT / game["file"]
+        if not src.exists():
+            if args.games:
+                sys.exit("%s: %s not found" % (key, src))
+            continue
+        rom = src.read_bytes()
+        if hashlib.sha1(rom).hexdigest() != game["sha1"]:
+            sys.exit("%s: unexpected ROM (sha1 %s)" % (src.name, game["sha1"]))
+        new = build(rom, game)
+        fix_checksum(new)
+        (HERE / game["out"]).write_bytes(new)
+        (HERE / game["ips"]).write_bytes(ips(rom, new))
+        print("%s: wrote %s and %s" % (game["title"], game["out"], game["ips"]))
+        built += 1
+    if not built:
+        sys.exit("no ROMs found (see games.py for the file names)")

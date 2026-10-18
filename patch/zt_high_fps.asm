@@ -1,4 +1,6 @@
-; Zero Tolerance (USA, Europe) (Rev A) - high frame rate patch
+; Zero Tolerance - high frame rate patch (Rev A, the mouse hack ROM, Underground; see games.py)
+;
+; Addresses in comments are Rev A's; each game's are in games.py.
 ;
 ; 1. Fixed-rate logic. The original main loop runs game logic once per rendered
 ;    frame, so game speed scales with frame rate. This splits the loop:
@@ -15,55 +17,56 @@
 ; Assembled with vasm (vasmm68k_mot -Fbin -m68000) and placed at ORG in free ROM.
 ; Hooks into the original code are applied by make_patch.py.
 
-ORG_ADDR        equ $1D0000
+; --- per game (make_patch.py passes these, from games.py) ---
+; ORG_ADDR                          free ROM space for this code
+; INPUT_A, INPUT_B                  per-tick input handlers (bsr'd from the main loop)
+; LOGIC_CONT                        rest of the original logic block
+; SUBMIT                            "frame ready" + vblank wait + sky scroll
+; HORIZON                           rebuild floor/ceiling buffer if horizon changed
+; RENDER                            3D view renderer (walls + objects)
+; CELL_LOGIC                        floor-cell events (lifts, stairs, sounds), called by RENDER
+; DIRTABLE                          angle (0..511) -> (cos, sin) words
+; Z80_BUSREQ, Z80_BUSREL            sound driver handshake around DMA
+; EXIT_TGT, DEATH_TGT               main loop exits (level exit, game over)
+; VBL, FB_PENDING, FLASH, FLASH_MODE, CAM_X, CAM_Y, CAM_A, CAM_H, CAM_DX, CAM_DY, BOB, EXIT_FLAG, LIVES, FB
+;                                   game variables (absolute; see games.py)
+; ZT_VARS                           $40 bytes of RAM the game never uses, for ours
+; MOUSE_TAIL                        (mouse hack ROM only) its VBlank end
 
-; --- original routines / addresses ---
-INPUT_A         equ $079A           ; per-tick input handlers (bsr'd at $162C/$1630)
-INPUT_B         equ $0D36
-LOGIC_CONT      equ $1634           ; rest of the original logic block
-SUBMIT          equ $146A           ; "frame ready" + vblank wait + sky scroll
-HORIZON         equ $D49A           ; rebuild floor/ceiling buffer if horizon changed
-RENDER          equ $B9A6           ; 3D view renderer (walls + objects)
-CELL_LOGIC      equ $B4E4           ; floor-cell events (lifts, stairs, sounds), called by RENDER
-BOB             equ -$6E92          ; $FF116E vertical bob set by CELL_LOGIC
-DIRTABLE        equ $8124           ; angle (0..511) -> (cos, sin) words
-
-VBL_DMA_DONE    equ $0BAC           ; RTE (original handler exit)
-Z80_BUSREQ      equ $C5BB6          ; sound driver handshake around DMA
-Z80_BUSREL      equ $C5BF4
 VDP_CTRL        equ $C00004
 VDP_DATA        equ $C00000
 VDP_HV          equ $C00008
 
-; --- game variables (a6 = $FF8000) ---
-FB_PENDING      equ $FF0002         ; framebuffer upload request (set to 2 by main loop)
-FLASH           equ $FF1072         ; damage flash colour
-FLASH_MODE      equ $FF0DE2
-VBL             equ -$8000          ; $FF0000 vblank counter
-CAM_X           equ -$7214          ; $FF0DEC 8.8 map position, wraps at $2000
-CAM_Y           equ -$7212          ; $FF0DEE
-CAM_A           equ -$71FC          ; $FF0E04 angle, 0..511
-CAM_H           equ -$71E6          ; $FF0E1A horizon offset
-CAM_DX          equ -$7200          ; $FF0E00 direction vector (from DIRTABLE)
-CAM_DY          equ -$71FE          ; $FF0E02
+; game variables as a6 displacements (a6 = $FF8000)
+A6              equ $FF8000
+VBL_W           equ VBL-A6
+CAM_X_W         equ CAM_X-A6
+CAM_Y_W         equ CAM_Y-A6
+CAM_A_W         equ CAM_A-A6
+CAM_H_W         equ CAM_H-A6
+CAM_DX_W        equ CAM_DX-A6
+CAM_DY_W        equ CAM_DY-A6
+BOB_W           equ BOB-A6
+EXIT_FLAG_W     equ EXIT_FLAG-A6
+LIVES_W         equ LIVES-A6
+VBL_COUNT       equ VBL
 
-; --- our variables: $FF7740.. (never read by the game; verified by RAM trace) ---
-ZT_LAST         equ -$08C0          ; vblank count of the last logic tick
-ZT_VALID        equ -$08BE          ; 0 = no camera history (level start)
-ZT_PREV         equ -$08BC          ; x, y, a, h of tick n-1
-ZT_CUR          equ -$08B4          ; x, y, a, h of tick n
-ZT_SAVE         equ -$08AC          ; real x, y, a, h, dx, dy while rendering
-ZT_RA           equ -$08A0          ; angle used for the last render (sky scroll)
-ZT_RONLY        equ -$089E          ; nonzero while rendering a between-ticks frame
-ZT_DISP         equ $FF7764         ; game wants display on (mirrors hooked reg 1 writes)
-ZT_BANDCNT      equ $FF7766         ; vblanks of band mode left since the last framebuffer DMA
-ZT_HPEND        equ $FF7768         ; band end armed but not yet reached
-ZT_NOBAND       equ $FF776A         ; vblanks to stay out of band mode after a missed line interrupt
-ZT_IEON         equ $FF776C         ; line interrupt enabled by us
-ZT_ARMVBL       equ $FF776E         ; vblank count when the band end was armed
-ZT_INGAME       equ $FF7770         ; main gameplay loop is running (band allowed)
-ZT_HD           equ $FF7772         ; set by an HD-renderer emulator: skip 68k rendering between ticks
-VBL_COUNT       equ $FF0000
+; --- our variables (ZT_VARS, $40 bytes) ---
+ZT_LAST         equ ZT_VARS+$00-A6      ; vblank count of the last logic tick
+ZT_VALID        equ ZT_VARS+$02-A6      ; 0 = no camera history (level start)
+ZT_PREV         equ ZT_VARS+$04-A6      ; x, y, a, h of tick n-1
+ZT_CUR          equ ZT_VARS+$0C-A6      ; x, y, a, h of tick n
+ZT_SAVE         equ ZT_VARS+$14-A6      ; real x, y, a, h, dx, dy while rendering
+ZT_RA           equ ZT_VARS+$20-A6      ; angle used for the last render (sky scroll)
+ZT_RONLY        equ ZT_VARS+$22-A6      ; nonzero while rendering a between-ticks frame
+ZT_DISP         equ ZT_VARS+$24         ; game wants display on (mirrors hooked reg 1 writes)
+ZT_BANDCNT      equ ZT_VARS+$26         ; vblanks of band mode left since the last framebuffer DMA
+ZT_HPEND        equ ZT_VARS+$28         ; band end armed but not yet reached
+ZT_NOBAND       equ ZT_VARS+$2A         ; vblanks to stay out of band mode after a missed line interrupt
+ZT_IEON         equ ZT_VARS+$2C         ; line interrupt enabled by us
+ZT_ARMVBL       equ ZT_VARS+$2E         ; vblank count when the band end was armed
+ZT_INGAME       equ ZT_VARS+$30         ; main gameplay loop is running (band allowed)
+ZT_HD           equ ZT_VARS+$32         ; set by an HD-renderer emulator: skip 68k rendering between ticks
 BAND_LINES      equ 16              ; display re-enabled after this many lines
 BAND_HOLD       equ 30
 NOBAND_HOLD     equ 120
@@ -95,6 +98,10 @@ SNAP_ANG        equ 96              ; angle jump (per tick) treated as teleport
         bra.w   ZT_DeathExit            ; +48
         dc.l    ZT_AfterRender          ; +52 (data) end of the logic-tick render, for emulator hooks
         dc.l    ZT_AfterInitRender      ; +56 (data) end of the level-start render (shown while the screen fades in)
+        dc.b    "ZTHD"                  ; +60 (data) marks this table for emulators
+        dc.w    GAME_ID                 ; +64 which game (games.py)
+        dc.w    0                       ; +66
+        dc.l    ZT_VARS                 ; +68 our variables
 
 ; ---------------------------------------------------------------------------
 ; Hook at $162C (replaces "bsr $79A; bsr $D36"): run logic or render-only.
@@ -102,7 +109,7 @@ SNAP_ANG        equ 96              ; angle jump (per tick) treated as teleport
 ZT_Decide:
         move.w  #1,ZT_INGAME
         bsr     ZT_Period               ; d1 = period
-        move.w  VBL(a6),d0
+        move.w  VBL_W(a6),d0
         sub.w   ZT_LAST(a6),d0          ; d0 = vblanks since last tick
         tst.w   ZT_VALID(a6)
         beq   .resync
@@ -115,7 +122,7 @@ ZT_Decide:
         add.w   d1,ZT_LAST(a6)
         bra   .logic
 .resync:
-        move.w  VBL(a6),ZT_LAST(a6)
+        move.w  VBL_W(a6),ZT_LAST(a6)
 .logic:
         jsr     INPUT_A
         jsr     INPUT_B
@@ -124,8 +131,8 @@ ZT_Decide:
 ZT_RenderOnly:
         tst.w   ZT_HD
         beq   .draw
-        move.w  VBL(a6),d0              ; HD emulator draws the in-between frames itself:
-.hdw:   cmp.w   VBL(a6),d0              ; just wait for the next vblank and decide again
+        move.w  VBL_W(a6),d0              ; HD emulator draws the in-between frames itself:
+.hdw:   cmp.w   VBL_W(a6),d0              ; just wait for the next vblank and decide again
         beq   .hdw
         bra     ZT_Decide
 .draw:
@@ -150,10 +157,10 @@ ZT_LogicRender:
         lea     ZT_CUR(a6),a1
         move.l  (a1),(a0)               ; prev = cur
         move.l  4(a1),4(a0)
-        move.w  CAM_X(a6),(a1)          ; cur = camera now
-        move.w  CAM_Y(a6),2(a1)
-        move.w  CAM_A(a6),4(a1)
-        move.w  CAM_H(a6),6(a1)
+        move.w  CAM_X_W(a6),(a1)          ; cur = camera now
+        move.w  CAM_Y_W(a6),2(a1)
+        move.w  CAM_A_W(a6),4(a1)
+        move.w  CAM_H_W(a6),6(a1)
         tst.w   ZT_VALID(a6)
         beq   .snap
         move.w  (a1),d0                 ; teleport checks
@@ -193,7 +200,7 @@ ZT_AfterRender:
 ZT_InitRender:
         clr.w   ZT_VALID(a6)
         clr.w   ZT_RONLY(a6)            ; a full render (a stale flag would hide it from emulator hooks)
-        move.w  CAM_A(a6),ZT_RA(a6)
+        move.w  CAM_A_W(a6),ZT_RA(a6)
         jsr     RENDER
 ZT_AfterInitRender:
         rts
@@ -206,7 +213,7 @@ ZT_Cell:
         tst.w   ZT_RONLY(a6)
         bne   .skip
         jsr     CELL_LOGIC
-.skip:  move.w  BOB(a6),d0
+.skip:  move.w  BOB_W(a6),d0
         rts
 
 ; ---------------------------------------------------------------------------
@@ -216,7 +223,7 @@ ZT_SkyAngle:
         move.w  ZT_RA(a6),d2
         tst.w   ZT_VALID(a6)
         bne   .ok
-        move.w  CAM_A(a6),d2
+        move.w  CAM_A_W(a6),d2
 .ok:    neg.w   d2
         rts
 
@@ -225,14 +232,14 @@ ZT_SkyAngle:
 ; ---------------------------------------------------------------------------
 ZT_Apply:
         lea     ZT_SAVE(a6),a2
-        move.w  CAM_X(a6),(a2)+
-        move.w  CAM_Y(a6),(a2)+
-        move.w  CAM_A(a6),(a2)+
-        move.w  CAM_H(a6),(a2)+
-        move.w  CAM_DX(a6),(a2)+
-        move.w  CAM_DY(a6),(a2)+
+        move.w  CAM_X_W(a6),(a2)+
+        move.w  CAM_Y_W(a6),(a2)+
+        move.w  CAM_A_W(a6),(a2)+
+        move.w  CAM_H_W(a6),(a2)+
+        move.w  CAM_DX_W(a6),(a2)+
+        move.w  CAM_DY_W(a6),(a2)+
         bsr     ZT_Period               ; d1 = period
-        move.w  VBL(a6),d2
+        move.w  VBL_W(a6),d2
         sub.w   ZT_LAST(a6),d2          ; d2 = t
         bpl   .t1
         moveq   #0,d2
@@ -248,7 +255,7 @@ ZT_Apply:
         bsr     ZT_Scale
         add.w   (a0),d0
         and.w   #$1FFF,d0
-        move.w  d0,CAM_X(a6)
+        move.w  d0,CAM_X_W(a6)
         ; y
         move.w  2(a1),d0
         sub.w   2(a0),d0
@@ -256,7 +263,7 @@ ZT_Apply:
         bsr     ZT_Scale
         add.w   2(a0),d0
         and.w   #$1FFF,d0
-        move.w  d0,CAM_Y(a6)
+        move.w  d0,CAM_Y_W(a6)
         ; angle + direction vector
         move.w  4(a1),d0
         sub.w   4(a0),d0
@@ -264,29 +271,29 @@ ZT_Apply:
         bsr     ZT_Scale
         add.w   4(a0),d0
         and.w   #$1FF,d0
-        move.w  d0,CAM_A(a6)
+        move.w  d0,CAM_A_W(a6)
         move.w  d0,ZT_RA(a6)
         lea     DIRTABLE,a3
         add.w   d0,d0
         add.w   d0,d0
-        move.w  (a3,d0.w),CAM_DX(a6)
-        move.w  2(a3,d0.w),CAM_DY(a6)
+        move.w  (a3,d0.w),CAM_DX_W(a6)
+        move.w  2(a3,d0.w),CAM_DY_W(a6)
         ; horizon
         move.w  6(a1),d0
         sub.w   6(a0),d0
         bsr     ZT_Scale
         add.w   6(a0),d0
-        move.w  d0,CAM_H(a6)
+        move.w  d0,CAM_H_W(a6)
         rts
 
 ZT_Restore:
         lea     ZT_SAVE(a6),a2
-        move.w  (a2)+,CAM_X(a6)
-        move.w  (a2)+,CAM_Y(a6)
-        move.w  (a2)+,CAM_A(a6)
-        move.w  (a2)+,CAM_H(a6)
-        move.w  (a2)+,CAM_DX(a6)
-        move.w  (a2)+,CAM_DY(a6)
+        move.w  (a2)+,CAM_X_W(a6)
+        move.w  (a2)+,CAM_Y_W(a6)
+        move.w  (a2)+,CAM_A_W(a6)
+        move.w  (a2)+,CAM_H_W(a6)
+        move.w  (a2)+,CAM_DX_W(a6)
+        move.w  (a2)+,CAM_DY_W(a6)
         rts
 
 ; d0 = d0 * d2 / d1 (signed d0, 0 <= d2 <= d1)
@@ -348,18 +355,18 @@ ZT_VBlankTail:
         move.w  #$8134,(a0)             ; display off, DMA on
         clr.w   FB_PENDING
         jsr     Z80_BUSREQ
-        move.w  #$9300,(a0)             ; 2 x $A00 words: $FF3926 -> VRAM $0020
+        move.w  #$9300,(a0)             ; 2 x $A00 words: FB -> VRAM $0020
         move.w  #$940A,(a0)
-        move.w  #$9593,(a0)
-        move.w  #$969C,(a0)
-        move.w  #$977F,(a0)
+        move.w  #$9500+((FB>>1)&$FF),(a0)
+        move.w  #$9600+((FB>>9)&$FF),(a0)
+        move.w  #$9700+((FB>>17)&$7F),(a0)
         move.w  #$4020,(a0)
         move.w  #$0080,(a0)
-        move.w  #$9300,(a0)             ;                  $FF4D26 -> VRAM $1420
+        move.w  #$9300,(a0)             ;                  FB+$1400 -> VRAM $1420
         move.w  #$940A,(a0)
-        move.w  #$9593,(a0)
-        move.w  #$96A6,(a0)
-        move.w  #$977F,(a0)
+        move.w  #$9500+(((FB+$1400)>>1)&$FF),(a0)
+        move.w  #$9600+(((FB+$1400)>>9)&$FF),(a0)
+        move.w  #$9700+(((FB+$1400)>>17)&$7F),(a0)
         move.w  #$5420,(a0)
         move.w  #$0080,(a0)
         jsr     Z80_BUSREL
@@ -384,7 +391,13 @@ ZT_VBlankTail:
         bra   .done
 .idle:  clr.w   ZT_HPEND                ; outside gameplay: leave the VDP alone
         bra   .out
-.done:  move.l  #$73600002,(a0)         ; restore VRAM write address (as original)
+.done:
+        ifd MOUSE_TAIL
+        movem.l (sp)+,d0/a0
+        jmp     MOUSE_TAIL              ; mouse hack ROM: its VBlank end (restores the VRAM address, reads the mouse)
+        else
+        move.l  #$73600002,(a0)         ; restore VRAM write address (as original)
+        endif
 .out:   movem.l (sp)+,d0/a0
         rte
 
@@ -395,29 +408,34 @@ ZT_SplitDma:
         jsr     Z80_BUSREQ
         subq.w  #1,FB_PENDING
         beq   .second
-        move.w  #$9300,(a0)             ; first half: $FF3926 -> VRAM $0020
+        move.w  #$9300,(a0)             ; first half: FB -> VRAM $0020
         move.w  #$940A,(a0)
-        move.w  #$9593,(a0)
-        move.w  #$969C,(a0)
-        move.w  #$977F,(a0)
+        move.w  #$9500+((FB>>1)&$FF),(a0)
+        move.w  #$9600+((FB>>9)&$FF),(a0)
+        move.w  #$9700+((FB>>17)&$7F),(a0)
         move.w  #$4020,(a0)
         move.w  #$0080,(a0)
         jsr     Z80_BUSREL
         bsr     ZT_Flash
         bra   .end
 .second:
-        move.w  #$9300,(a0)             ; second half: $FF4D26 -> VRAM $1420
+        move.w  #$9300,(a0)             ; second half: FB+$1400 -> VRAM $1420
         move.w  #$940A,(a0)
-        move.w  #$9593,(a0)
-        move.w  #$96A6,(a0)
-        move.w  #$977F,(a0)
+        move.w  #$9500+(((FB+$1400)>>1)&$FF),(a0)
+        move.w  #$9600+(((FB+$1400)>>9)&$FF),(a0)
+        move.w  #$9700+(((FB+$1400)>>17)&$7F),(a0)
         move.w  #$5420,(a0)
         move.w  #$0080,(a0)
         jsr     Z80_BUSREL
 .end:   move.w  #$8164,(a0)             ; display on, DMA off
+        ifd MOUSE_TAIL
+        movem.l (sp)+,d0/a0
+        jmp     MOUSE_TAIL
+        else
         move.l  #$73600002,(a0)
         movem.l (sp)+,d0/a0
         rte
+        endif
 
 ; NE if the top band should be blanked this frame (PAL VBlank fits the DMA: never)
 ZT_BandOK:
@@ -511,18 +529,18 @@ ZT_DispOff:
 ; ---------------------------------------------------------------------------
 ; Main loop exits: level exit at $173A, death at $1788.
 ; ---------------------------------------------------------------------------
-ZT_ExitCheck:                           ; replaces "tst.w $-58DE(a6); bne.w $1A40"
-        tst.w   -$58DE(a6)
+ZT_ExitCheck:                           ; replaces "tst.w EXIT_FLAG(a6); bne.w EXIT_TGT"
+        tst.w   EXIT_FLAG_W(a6)
         beq   .x
         bsr     ZT_Disarm
-        move.l  #$1A40,(sp)             ; leave the loop as the original does
+        move.l  #EXIT_TGT,(sp)             ; leave the loop as the original does
 .x:     rts
 
-ZT_DeathExit:                           ; replaces "move.w -$5B18(a6),d7; beq.b $17AE"
+ZT_DeathExit:                           ; replaces "move.w LIVES(a6),d7; beq.b DEATH_TGT"
         bsr     ZT_Disarm
-        move.w  -$5B18(a6),d7
+        move.w  LIVES_W(a6),d7
         bne   .x
-        move.l  #$17AE,(sp)
+        move.l  #DEATH_TGT,(sp)
 .x:     rts
 
 ; ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ int zt_hd_input(void);
 void zt_hd_pad(unsigned short *pad);
 void zt_hd_load_cfg(void);
 void zt_hd_save_cfg(void);
-extern unsigned int zt_hd_after_pc, zt_hd_after_init_pc;
+extern unsigned int zt_hd_after_pc, zt_hd_after_init_pc, zt_hd_hook_pc[10];
 void zt_hd_hook(unsigned int pc, unsigned int *regs);
 unsigned short *zt_hd_compose(const unsigned short *native, int npitch, int nw, int nh);
 #endif

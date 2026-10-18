@@ -43,13 +43,54 @@ static int ow, oh;                  /* current output size */
 float zt_hd_fov = 106.0f;
 unsigned int zt_hd_after_pc = 0;
 unsigned int zt_hd_after_init_pc = 1;  /* end of the level-start render (1 = none: older ROM patch) */
+unsigned int zt_hd_hook_pc[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};   /* PCs zt_hd_hook wants (odd = none) */
 unsigned int zt_hd_dbg[8];
 unsigned char zt_hd_dbg_regs[0x20], zt_hd_dbg_bg[0xA0];
 double zt_hd_dbg_cam[8];
 unsigned char *zt_hd_dbg_idx(void);          /* debug counters: hooks, ticks, sprites, commits, gameplay checks */
 
-#define ORG_TABLE 0x1D0000
-#define TEX_BASE  0x12EF26
+/* ---------------------------------------------------------------- games
+   The supported games are the same engine rebuilt (patch/games.py): code moves and some RAM moves. Code
+   below uses Rev A's RAM addresses through RA(), which maps them to the running game's, and the ROM
+   addresses here. The ROM patch's table (found by its "ZTHD" mark) says which game it is. */
+typedef struct { uint32 lo, hi; int32 d; } ram_shift_t;
+typedef struct {
+  int id;
+  /* hooks: render start, edge pass, sprite projection, object draw (2), object sprite, map item, sprite piece */
+  uint32 render, edge, proj, obj1, obj2, spr, item, piece;
+  uint32 cell_tab; int ncell;                 /* cell type handler table, entries */
+  uint32 h_item, h_empty, h_solid, h_lvl, h_lift, door[4];   /* handlers: map item, empty, solid, multi-level
+                                                 walls [h_lvl, h_lift), lift shaft; doors (see door[]) */
+  uint32 shaded;                              /* column routines by height (shaded walls) */
+  uint32 unshaded;                            /* sprite shade list: none */
+  uint32 blood;                               /* blood drop object type */
+  uint32 empty_tab;                           /* per cell type: no floor edges */
+  uint32 tex_base, tex_ram;                   /* wall textures: fixed, or a pointer in RAM (Underground) */
+  ram_shift_t ram[4];                         /* Rev A RAM -> this game's, by range */
+} zt_game_t;
+
+static const zt_game_t zt_games[] = {
+  {1, 0xB9A6, 0x9D72, 0x1329A, 0x13360, 0x13388, 0x1BCB4, 0x113EE, 0xEDA0, 0x923A, 133,
+   0x944E, 0x9454, 0x9458, 0x945E, 0x9862, {0xAF5E, 0xAD8C, 0xB000, 0xAE2E},
+   0x4392, 0xED50, 0x159FE, 0xBB90, 0x12EF26, 0, {{0}}},
+  {3, 0xBC4C, 0x9FB0, 0x13C52, 0x13D18, 0x13D40, 0x1C680, 0x11866, 0xF218, 0x92FC, 228,
+   0x968C, 0x9692, 0x9696, 0x969C, 0x9AA0, {0xB19C, 0xAFCA, 0xB23E, 0xB06C},
+   0x4454, 0xF1C8, 0x163BE, 0xBE36, 0, 0xFF0E74, {{0xFF0E74, 0xFFF000, 4}}},
+};
+static const zt_game_t *G = &zt_games[0];
+static uint32 zvars = 0xFF7740;     /* the ROM patch's variables (ZT_VARS) */
+#define ZV_CUR    (zvars + 0x0C)    /* x, y, angle, horizon of the last tick, as rendered */
+#define ZV_RONLY  (zvars + 0x22)    /* rendering a between-ticks frame */
+#define ZV_INGAME (zvars + 0x30)    /* gameplay loop running */
+#define ZV_HD     (zvars + 0x32)    /* set by us: the patch skips its between-ticks renders */
+
+static inline uint32 RA(uint32 a)   /* Rev A RAM address -> the game's */
+{
+  const ram_shift_t *r;
+  for (r = G->ram; r->hi; r++) if (a >= r->lo && a < r->hi) return a + r->d;
+  return a;
+}
+static inline int32 RA6(uint32 a) { return (int32)RA(a) - 0xFF8000; }   /* as an a6 displacement */
 
 /* ---------------------------------------------------------------- ROM / RAM access */
 static uint8 *rom_be;               /* big-endian copy of the ROM */
@@ -60,6 +101,7 @@ static uint32 level_hnd[256];       /* multi-level wall types (stairs, pits, upp
                                        1 = lift shaft walls ($9862) */
 static int shade_of_h[82];          /* shade level per even native wall height (-1 none) */
 static uint32 shaded_table;         /* $4392 */
+static uint32 tex_base;             /* wall textures */
 
 static inline uint32 R8(uint32 a) { return a < rom_size ? rom_be[a] : 0; }
 static inline uint32 R16(uint32 a) { return (R8(a) << 8) | R8(a + 1); }
@@ -99,29 +141,48 @@ static int prepare_rom(void)
 {
   uint32 i, h;
   if (rom_be) return 1;
+  uint32 org = 0, id = 1;
+  int32 sh0, sh1;
   if (cart.romsize < 0x1D0100) return 0;
   rom_size = cart.romsize;
   rom_be = malloc(rom_size);
   for (i = 0; i < rom_size; i++) rom_be[i] = READ_BYTE(cart.rom, i);
-  if (memcmp(rom_be + 0x150, "ZERO TOLERANCE", 14) || R16(ORG_TABLE) != 0x6000)
+  if (!memcmp(rom_be + 0x150, "ZERO TOLERANCE", 14))
   {
-    free(rom_be); rom_be = NULL; return 0;          /* not the patched Zero Tolerance ROM */
+    /* the ROM patch's entry table: "ZTHD" at +60, the game at +64, its variables at +68 */
+    for (i = 0x200; i + 72 <= rom_size; i += 2)
+      if (!memcmp(rom_be + i + 60, "ZTHD", 4) && R16(i) == 0x6000) { org = i; break; }
+    if (org) { id = R16(org + 64); zvars = R32(org + 68); }
+    else if (R16(0x1D0000) == 0x6000) { org = 0x1D0000; zvars = 0xFF7740; }   /* older patch: Rev A only */
   }
-  zt_hd_after_pc = R32(ORG_TABLE + 52);
-  zt_hd_after_init_pc = R32(ORG_TABLE + 56);
-  if (zt_hd_after_init_pc < ORG_TABLE || zt_hd_after_init_pc >= ORG_TABLE + 0x10000 || (zt_hd_after_init_pc & 1))
+  for (G = NULL, i = 0; i < sizeof zt_games / sizeof zt_games[0]; i++)
+    if (zt_games[i].id == (int)(id == 2 ? 1 : id)) G = &zt_games[i];          /* 2: Rev A with the mouse hack */
+  if (!org || !G)
+  {
+    G = &zt_games[0];
+    free(rom_be); rom_be = NULL; return 0;          /* not a patched Zero Tolerance ROM we know */
+  }
+  zt_hd_after_pc = R32(org + 52);
+  zt_hd_after_init_pc = R32(org + 56);
+  if (zt_hd_after_init_pc < org || zt_hd_after_init_pc >= org + 0x10000 || (zt_hd_after_init_pc & 1))
     zt_hd_after_init_pc = 1;                       /* older patch: the table ends at +52 */
-  /* cell type handlers ($9226 dispatch table at $923A) */
+  zt_hd_hook_pc[0] = G->render; zt_hd_hook_pc[1] = G->piece; zt_hd_hook_pc[2] = G->obj1; zt_hd_hook_pc[3] = G->obj2;
+  zt_hd_hook_pc[4] = G->item; zt_hd_hook_pc[5] = G->spr; zt_hd_hook_pc[6] = G->edge; zt_hd_hook_pc[7] = G->proj;
+  zt_hd_hook_pc[8] = zt_hd_after_pc; zt_hd_hook_pc[9] = zt_hd_after_init_pc;
+  /* cell type handlers (Rev A: $9226 dispatch table at $923A) */
   for (i = 0; i < 256; i++)
   {
-    uint32 hnd = i < 133 ? R32(0x923A + i * 4) : 0x9454;
-    level_hnd[i] = (i >= 6 && hnd >= 0x945E && hnd < 0x9862) ? hnd : (i >= 6 && hnd == 0x9862) ? 1 : 0;
-    solid[i] = (i == 1) || (i >= 6 && hnd == 0x9458) || level_hnd[i];
-    item_type[i] = hnd == 0x944E;
-    door[i] = (hnd == 0xAF5E) ? 1 : (hnd == 0xAD8C) ? 2 : (hnd == 0xB000) ? 3 : (hnd == 0xAE2E) ? 4 : 0;
+    uint32 hnd = (int)i < G->ncell ? R32(G->cell_tab + i * 4) : G->h_empty;
+    level_hnd[i] = (i >= 6 && hnd >= G->h_lvl && hnd < G->h_lift) ? hnd : (i >= 6 && hnd == G->h_lift) ? 1 : 0;
+    solid[i] = (i == 1) || (i >= 6 && hnd == G->h_solid) || level_hnd[i];
+    item_type[i] = hnd == G->h_item;
+    door[i] = (hnd == G->door[0]) ? 1 : (hnd == G->door[1]) ? 2 : (hnd == G->door[2]) ? 3 : (hnd == G->door[3]) ? 4 : 0;
   }
-  /* shade level per height: first "movea.l -$71xx(a6),a3" (266E xxxx) in each column routine */
-  shaded_table = 0x4392;
+  tex_base = G->tex_base;
+  /* shade level per height: first "movea.l -$71xx(a6),a3" (266E xxxx) in each column routine, xxxx one of
+     the shade table pointers (Rev A $FF0E8A-$FF0EA6) */
+  shaded_table = G->shaded;
+  sh0 = RA6(0xFF0E8A); sh1 = RA6(0xFF0EA6);
   for (h = 0; h < 82; h++) shade_of_h[h] = -1;
   for (h = 2; h <= 80; h += 2)
   {
@@ -130,7 +191,7 @@ static int prepare_rom(void)
       if (R16(a + k) == 0x266E)
       {
         int32 d = (int16)R16(a + k + 2);
-        if (d <= -0x715A && d >= -0x7176) { shade_of_h[h] = (0x7176 + d) / 4; break; }
+        if (d >= sh0 && d <= sh1) { shade_of_h[h] = (d - sh0) / 4; break; }
       }
   }
   return 1;
@@ -143,61 +204,62 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   uint32 i;
   if (!zt_hd_enabled || !prepare_rom()) return;
   zt_hd_dbg[0]++;
-  if (pc == 0xB9A6)                                   /* render start */
+  if (pc == G->render)                                /* render start */
   {
-    if (live_w(0xFF7762)) return;                     /* between-ticks render: not a tick */
+    if (live_w(ZV_RONLY)) return;                     /* between-ticks render: not a tick */
     zt_hd_dbg[1]++;
     building = 1; s->npc = 0; s->nedge = 0; anchor_id = 0;
-    s->hor_walls = s->hor_spr = (int16)live_w(0xFF0E1A);
+    if (G->tex_ram) tex_base = live_l(G->tex_ram);    /* this level's wall textures */
+    s->hor_walls = s->hor_spr = (int16)live_w(RA(0xFF0E1A));
   }
-  else if (pc == 0x9D72 && building)                  /* edge pass: list of corner pairs (relative to the camera cell) */
+  else if (pc == G->edge && building)                  /* edge pass: list of corner pairs (relative to the camera cell) */
   {
-    int n = live_w(0xFF1180), k, cx = (int16)live_w(0xFF0E06), cy = (int16)live_w(0xFF0E08);
+    int n = live_w(RA(0xFF1180)), k, cx = (int16)live_w(RA(0xFF0E06)), cy = (int16)live_w(RA(0xFF0E08));
     s->nedge = 0;
-    s->hor_walls = (int16)live_w(0xFF0E1A);
+    s->hor_walls = (int16)live_w(RA(0xFF0E1A));
     for (k = 0; k < n && k < 32; k++)
     {
-      uint32 e = 0xFF1182 + k * 6;
+      uint32 e = RA(0xFF1182) + k * 6;
       s->edge[k].x0 = (int8)READ_BYTE(work_ram, e & 0xFFFF) + cx; s->edge[k].y0 = (int8)READ_BYTE(work_ram, (e + 1) & 0xFFFF) + cy;
       s->edge[k].x1 = (int8)READ_BYTE(work_ram, (e + 2) & 0xFFFF) + cx; s->edge[k].y1 = (int8)READ_BYTE(work_ram, (e + 3) & 0xFFFF) + cy;
       s->edge[k].flag = live_w(e + 4) != 0;
       s->nedge++;
     }
   }
-  else if (pc == 0x1329A && building)                 /* sprite projection: horizon now includes the elevation fix-up */
-    s->hor_spr = (int16)live_w(0xFF0E1A);
-  else if ((pc == 0x13360 || pc == 0x13388) && building)   /* object draw routine: a0 = object */
+  else if (pc == G->proj && building)                 /* sprite projection: horizon now includes the elevation fix-up */
+    s->hor_spr = (int16)live_w(RA(0xFF0E1A));
+  else if ((pc == G->obj1 || pc == G->obj2) && building)   /* object draw routine: a0 = object */
   {
     anchor_id = regs[8] & 0xFFFFFF; anchor_type = 0; anchor_rec = 0;
     anchor_x = live_w(anchor_id + 0x20); anchor_y = live_w(anchor_id + 0x22); anchor_z = live_w(anchor_id + 0x24);
   }
-  else if (pc == 0x1BCB4 && building && anchor_id && !(anchor_id & 0x1000000))
+  else if (pc == G->spr && building && anchor_id && !(anchor_id & 0x1000000))
   {
     /* object sprite routine: a1 = sub-frame record (+0/+1 x/y anchor, +2/+3 piece width/height factors,
        +4/+5 grid columns/rows, +6 attributes, +$16 piece ids), a2 = piece base. Its pieces' layout is
        computed exactly from the record instead of from the rounded rectangles */
     anchor_rec = regs[9] & 0xFFFFFF; anchor_pbase = regs[10] & 0xFFFFFF; anchor_used = 0;
   }
-  else if (pc == 0x113EE && building)                 /* map item (pickup): a3 = record (cell relative to $FF0E06/08) */
+  else if (pc == G->item && building)                 /* map item (pickup): a3 = record (cell relative to $FF0E06/08) */
   {
     uint32 r = regs[11] & 0xFFFFFF;
-    int cx = (live_w(r + 2) + live_w(0xFF0E06)) & 31, cy = (live_w(r) + live_w(0xFF0E08)) & 31;   /* +0 dy, +2 dx */
+    int cx = (live_w(r + 2) + live_w(RA(0xFF0E06))) & 31, cy = (live_w(r) + live_w(RA(0xFF0E08))) & 31;   /* +0 dy, +2 dx */
     anchor_id = 0x1000000 | cy << 8 | cx;              /* items don't move: the cell is the id */
     anchor_rec = 0;
     anchor_x = (cx << 8) + 0x80; anchor_y = (cy << 8) + 0x80; anchor_z = 0;
     anchor_type = READ_BYTE(work_ram, (r + 5) & 0xFFFF);
     anchor_col = regs[1]; anchor_row = regs[2]; anchor_scale = regs[5];   /* d1, d2 ($113E8), d5 */
   }
-  else if (pc == 0xEDA0 && building)                  /* sprite piece: d1/d2 column/row, d4 x d0 size, a1 texels */
+  else if (pc == G->piece && building)                  /* sprite piece: d1/d2 column/row, d4 x d0 size, a1 texels */
   {
     int16 h = regs[0], w = regs[4];
-    uint32 list = live_l(0xFF1096), shade;
+    uint32 list = live_l(RA(0xFF1096)), shade;
     zt_hd_dbg[2]++;
     if (h <= 0 || w <= 0 || s->npc >= 256 || !anchor_id) return;
-    if (list == 0xED50) shade = R32(0xED50);          /* unshaded */
+    if (list == G->unshaded) shade = R32(G->unshaded);   /* unshaded */
     else
     {
-      int d3 = ((int16)live_w(0xFF1094) >> 3) - 1;    /* the drawer's level from the scale; too far = not drawn */
+      int d3 = ((int16)live_w(RA(0xFF1094)) >> 3) - 1;    /* the drawer's level from the scale; too far = not drawn */
       if (d3 < 0) return;
       d3 = 4 - d3; if (d3 < 0) d3 = 0;
       shade = (list + d3 * 4) >= 0xFF0000 ? live_l(list + d3 * 4) : R32(list + d3 * 4);
@@ -221,7 +283,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     s->pc[s->npc].obj = anchor_id; s->pc[s->npc].x = anchor_x; s->pc[s->npc].y = anchor_y; s->pc[s->npc].z = anchor_z;
     s->pc[s->npc].data = regs[9] & 0xFFFFFF; s->pc[s->npc].shade = shade;
     s->pc[s->npc].col = regs[1]; s->pc[s->npc].row = regs[2]; s->pc[s->npc].w = w; s->pc[s->npc].h = h;
-    s->pc[s->npc].mirror = live_w(0xFF1088) != 0;
+    s->pc[s->npc].mirror = live_w(RA(0xFF1088)) != 0;
     s->npc++;
   }
   else if (pc == zt_hd_after_pc && building)          /* tick render finished: commit */
@@ -238,12 +300,12 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   {
     /* no tick has run yet, so ZT_CUR (the tick camera) is stale: use the game's camera, and no
        interpolation (both snapshots the same) */
-    static const uint32 cam[4] = {0xFF0DEC, 0xFF0DEE, 0xFF0E04, 0xFF0E1A};
+    const uint32 cam[4] = {RA(0xFF0DEC), RA(0xFF0DEE), RA(0xFF0E04), RA(0xFF0E1A)};
     for (i = 0; i < 0x10000; i++) s->ram[i] = READ_BYTE(work_ram, i);
     for (i = 0; i < 4; i++)
     {
-      s->ram[(0x774C + i * 2) & 0xFFFF] = READ_BYTE(work_ram, cam[i] & 0xFFFF);
-      s->ram[(0x774D + i * 2) & 0xFFFF] = READ_BYTE(work_ram, (cam[i] + 1) & 0xFFFF);
+      s->ram[(ZV_CUR + i * 2) & 0xFFFF] = READ_BYTE(work_ram, cam[i] & 0xFFFF);
+      s->ram[(ZV_CUR + 1 + i * 2) & 0xFFFF] = READ_BYTE(work_ram, (cam[i] + 1) & 0xFFFF);
     }
     s->vbl = M16(s, 0xFF0000);
     s->valid = 1;
@@ -261,7 +323,7 @@ static double wrapd(double d, double m) { while (d >= m / 2) d -= m; while (d < 
 static void snap_cam(const snap_t *s, double *x, double *y, double *a, double *h)
 {
   /* ZT_CUR ($FF774C): this tick's camera as the game rendered it (x, y, angle, horizon) */
-  *x = M16(s, 0xFF774C); *y = M16(s, 0xFF774E); *a = M16(s, 0xFF7750) & 511; *h = S16(s, 0xFF7752);
+  *x = M16(s, ZV_CUR); *y = M16(s, ZV_CUR + 2); *a = M16(s, ZV_CUR + 4) & 511; *h = S16(s, ZV_CUR + 6);
 }
 
 static void make_cam(cam_t *c, double t)
@@ -313,7 +375,7 @@ unsigned char *zt_hd_dbg_idx(void) { return idx; }
    entries: map cell address, offset word), end pointer at $FF0EC2 ($B33A) */
 static int door_offset(const snap_t *s, uint32 cell_addr)
 {
-  uint32 p = 0xFF0EC6, end = M32(s, 0xFF0EC2);
+  uint32 p = RA(0xFF0EC6), end = M32(s, RA(0xFF0EC2));
   int k;
   for (k = 0; p < end && k < 64; p += 14, k++)
     if (M32(s, p) == cell_addr) return S16(s, p + 4);
@@ -321,7 +383,7 @@ static int door_offset(const snap_t *s, uint32 cell_addr)
 }
 
 /* ---------------------------------------------------------------- walls */
-static inline int texel(uint32 tid, int col, int v) { return R8(TEX_BASE + tid * 512 + col * 32 + v); }
+static inline int texel(uint32 tid, int col, int v) { return R8(tex_base + tid * 512 + col * 32 + v); }
 
 /* Face modes of a multi-level wall cell: per face (N, S, E, W) two signed bytes, the vertical offset at the
    face's left and right ends as the viewer sees it (64 = one wall height). The cell handlers ($945E-$9861)
@@ -329,7 +391,7 @@ static inline int texel(uint32 tid, int col, int v) { return R8(TEX_BASE + tid *
    constants; they are interpreted here. Lift walls ($9862) are offset by the elevation's low byte. */
 static int face_modes(const snap_t *s, uint32 hnd, int d0, int d1, uint16 m[4])
 {
-  int z = S16(s, 0xFF116E), v = 0, n, i;
+  int z = S16(s, RA(0xFF116E)), v = 0, n, i;
   uint32 pc = hnd;
   m[0] = m[1] = m[2] = m[3] = 0;
   if (hnd == 1)
@@ -341,7 +403,7 @@ static int face_modes(const snap_t *s, uint32 hnd, int d0, int d1, uint16 m[4])
   for (n = 0; n < 32; n++)
   {
     uint32 op = R16(pc);
-    if (op == 0x4A6E && R16(pc + 2) == 0x916E) { v = z; pc += 4; }                    /* tst.w -$6e92(a6) */
+    if (op == 0x4A6E && (int16)R16(pc + 2) == RA6(0xFF116E)) { v = z; pc += 4; }       /* tst.w BOB(a6) */
     else if (op == 0x4A40) { v = d0; pc += 2; }                                       /* tst.w d0 */
     else if (op == 0x4A41) { v = d1; pc += 2; }                                       /* tst.w d1 */
     else if ((op >> 12) == 6)                                                         /* bxx.b */
@@ -362,7 +424,7 @@ static int face_modes(const snap_t *s, uint32 hnd, int d0, int d1, uint16 m[4])
     else if (op == 0x2D7C)                                                            /* move.l #imm, d16(a6) */
     {
       uint32 imm = R32(pc + 2); int d = (int16)R16(pc + 6);
-      i = (d + 0x6E8C) / 2;                     /* -$6e8c N, -$6e8a S, -$6e88 E, -$6e86 W */
+      i = (d - RA6(0xFF1174)) / 2;              /* Rev A -$6e8c N, -$6e8a S, -$6e88 E, -$6e86 W */
       if (i >= 0 && i < 3) { m[i] = imm >> 16; m[i + 1] = imm & 0xFFFF; }
       pc += 8;
     }
@@ -390,9 +452,9 @@ static void draw_column(const snap_t *s, int x, double dist, uint32 cell, int fa
   if (sub < 0) sub = 0; if (sub > 127) sub = 127;
   ucol = sub >> 1; half = sub & 1;               /* a texel byte is two pixels side by side (hi, lo nibble) */
   fw = face_word;
-  st = 0xFF63C6 + fw * 16 + (ucol >> 4) * 4;
+  st = RA(0xFF63C6) + fw * 16 + (ucol >> 4) * 4;
   top = M16(s, st); bot = M16(s, st + 2);
-  if (M32(s, 0xFF0EAA) == shaded_table)
+  if (M32(s, RA(0xFF0EAA)) == shaded_table)
   {
     int hn = ((int)(64.0 / dist)) & ~1;
     if (hn >= 2 && hn <= 80) sh = shade_of_h[hn];
@@ -402,7 +464,7 @@ static void draw_column(const snap_t *s, int x, double dist, uint32 cell, int fa
   if (ystart < yend)
   {
     uint8 colc[64];                              /* the column's 64 texels: this half's colour, shaded */
-    uint32 shade = sh >= 0 ? M32(s, 0xFF0E8A + sh * 4) : 0;
+    uint32 shade = sh >= 0 ? M32(s, RA(0xFF0E8A) + sh * 4) : 0;
     double tv = (ystart - y0) * 64 / h, step = 64 / h;
     uint8 *dst = idx + ystart * rw + x;
     int v;
@@ -437,7 +499,7 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
 {
   double half = (W / 2.0) / focal;
   double plx = -c->dy * half, ply = c->dx * half;
-  uint32 mapp = M32(s, 0xFF1024);
+  uint32 mapp = M32(s, RA(0xFF1024));
   int x;
   for (x = 0; x < W; x++)
   {
@@ -451,7 +513,7 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
     {
       /* the camera's own cell: a diagonal wall in it (the player can stand in the open half) is hit before
          the ray leaves the cell. The original doesn't test it and draws an empty view there. */
-      uint32 cell = M8(s, mapp + my * 32 + mx), ct = M8(s, 0xFF7BC6 + cell);
+      uint32 cell = M8(s, mapp + my * 32 + mx), ct = M8(s, RA(0xFF7BC6) + cell);
       if (ct >= 2 && ct <= 5)
       {
         static const int dw[6] = {0, 0, 3, 0, 0, 3};
@@ -466,7 +528,7 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
           {
             double hx = c->px + rx * t, hy = c->py + ry * t;
             double u = sqrt((hx - ax) * (hx - ax) + (hy - ay) * (hy - ay)) / sqrt(2.0);
-            draw_column(s, x, t, cell, M16(s, 0xFF73C6 + cell * 8 + dw[ct] * 2), u, focal, c->hor, H, 0);
+            draw_column(s, x, t, cell, M16(s, RA(0xFF73C6) + cell * 8 + dw[ct] * 2), u, focal, c->hor, H, 0);
             wdist[x] = (float)t;
             continue;
           }
@@ -479,7 +541,7 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
       double tin;
       if (sdx < sdy) { sdx += ddx; mx += stepx; side = 0; } else { sdy += ddy; my += stepy; side = 1; }
       if (mx < 0 || mx > 31 || my < 0 || my > 31) break;
-      cell = M8(s, mapp + my * 32 + mx); ct = M8(s, 0xFF7BC6 + cell);
+      cell = M8(s, mapp + my * 32 + mx); ct = M8(s, RA(0xFF7BC6) + cell);
       tin = side == 0 ? sdx - ddx : sdy - ddy;
       if (solid[ct])
       {
@@ -491,9 +553,9 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
         {
           static const int mi[4] = {0, 3, 2, 1};      /* our faces N W E S -> mode words N S E W */
           uint16 m[4];
-          if (face_modes(s, level_hnd[ct], mx - S16(s, 0xFF0E06), my - S16(s, 0xFF0E08), m)) mode = m[mi[face]];
+          if (face_modes(s, level_hnd[ct], mx - S16(s, RA(0xFF0E06)), my - S16(s, RA(0xFF0E08)), m)) mode = m[mi[face]];
         }
-        draw_column(s, x, tin, cell, M16(s, 0xFF73C6 + cell * 8 + face * 2), u, focal, c->hor, H, mode);
+        draw_column(s, x, tin, cell, M16(s, RA(0xFF73C6) + cell * 8 + face * 2), u, focal, c->hor, H, mode);
         wdist[x] = (float)tin;
         break;
       }
@@ -539,13 +601,13 @@ static void render_walls(const snap_t *s, const cam_t *c, int W, int H, double f
         static const double d[6][4] = {{0}, {0}, {0, 0, 1, 1}, {1, 0, 0, 1}, {1, 1, 0, 0}, {0, 1, 1, 0}};
         double ax = mx + d[ct][0], ay = my + d[ct][1], bx = mx + d[ct][2], by = my + d[ct][3];
         double ex = c->px + rx * tin, ey = c->py + ry * tin, den, t, tout = sdx < sdy ? sdx : sdy;
-        int fw = M16(s, 0xFF73C6 + cell * 8 + dw[ct] * 2);
+        int fw = M16(s, RA(0xFF73C6) + cell * 8 + dw[ct] * 2);
         if ((bx - ax) * (ey - ay) - (by - ay) * (ex - ax) < -1e-9)        /* entered the solid half */
         {
           int face; double u;
           if (side == 0) { face = stepx > 0 ? 1 : 2; u = ey - floor(ey); if (face == 2) u = 1 - u; }
           else { face = stepy > 0 ? 0 : 3; u = ex - floor(ex); if (face == 0) u = 1 - u; }
-          draw_column(s, x, tin, cell, M16(s, 0xFF73C6 + cell * 8 + face * 2), u, focal, c->hor, H, 0);
+          draw_column(s, x, tin, cell, M16(s, RA(0xFF73C6) + cell * 8 + face * 2), u, focal, c->hor, H, 0);
           wdist[x] = (float)tin; break;
         }
         den = rx * (by - ay) - ry * (bx - ax);
@@ -576,7 +638,7 @@ static void render_background(const snap_t *s, int W, int H, double f)
     uint32 b0, b1, pat;
     uint8 *row = idx + y * W, p4[4];
     if (r < 0) r = 0; if (r > 79) r = 79;
-    b0 = M8(s, 0xFF6226 + 0x50 + r); b1 = M8(s, 0xFF6226 + r);
+    b0 = M8(s, RA(0xFF6226) + 0x50 + r); b1 = M8(s, RA(0xFF6226) + r);
     p4[0] = PIX(b0, 0); p4[1] = PIX(b0, 1); p4[2] = PIX(b1, 0); p4[3] = PIX(b1, 1);
     memcpy(&pat, p4, 4);
     for (x = 0; x + 4 <= W; x += 4) memcpy(row + x, &pat, 4);
@@ -591,8 +653,8 @@ static void render_background(const snap_t *s, int W, int H, double f)
 static void render_edges(const snap_t *s, const cam_t *c, int W, int H, double focal)
 {
   double half = (W / 2.0) / focal, plx = -c->dy * half, ply = c->dx * half, f = (focal / 2) / 64.0;
-  uint32 pcell = M32(s, 0xFF0E12);
-  int k, x, y, empty_last = R8(0xBB90 + M8(s, 0xFF7BC6 + M8(s, pcell))) != 0;
+  uint32 pcell = M32(s, RA(0xFF0E12));
+  int k, x, y, empty_last = R8(G->empty_tab + M8(s, RA(0xFF7BC6) + M8(s, pcell))) != 0;
   for (k = 0; k < s->nedge; k++)
   {
     double ax = s->edge[k].x0, ay = s->edge[k].y0, bx = s->edge[k].x1, by = s->edge[k].y1;
@@ -616,7 +678,7 @@ static void render_edges(const snap_t *s, const cam_t *c, int W, int H, double f
           int r = (int)floor(40 + (y + 0.5 - H / 2.0) / f + 0.5);
           uint32 b;
           if (r < 0) r = 0; if (r > 79) r = 79;
-          b = M8(s, 0xFF6226 + (((x >> 1) & 1) ? 0 : 0x50) + r);
+          b = M8(s, RA(0xFF6226) + (((x >> 1) & 1) ? 0 : 0x50) + r);
           idx[y * W + x] = PIX(b, x & 1);
         }
         else idx[y * W + x] = 0x11;
@@ -660,7 +722,7 @@ static double piece_z(const snap_t *s, const snap_t *s0, int i, double t)
 static uint32 piece_shade(const snap_t *s, uint32 list, double sc)
 {
   int d3;
-  if (list == 0xED50) return R32(0xED50);
+  if (list == G->unshaded) return R32(G->unshaded);
   d3 = ((int)sc >> 3) - 1;
   if (d3 < 0) return 0;
   d3 = 4 - d3; if (d3 < 0) d3 = 0;
@@ -760,9 +822,9 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
   cam_t nc;
   /* sprite rows: 40 + (horizon - $FF116E - z) * scale / 64, with the horizon as it was at $1329A (the render
      adjusts it for the player's elevation); the HD camera's horizon is offset by the same amount */
-  double bob = S16(s, 0xFF116E), nhor = s->hor_spr;
-  uint32 mapp = M32(s, 0xFF1024);
-  int i, j, n = 0, rad = M16(s, 0xFF0EB4), mx, my, cx = (int)floor(c->px), cy = (int)floor(c->py);
+  double bob = S16(s, RA(0xFF116E)), nhor = s->hor_spr;
+  uint32 mapp = M32(s, RA(0xFF1024));
+  int i, j, n = 0, rad = M16(s, RA(0xFF0EB4)), mx, my, cx = (int)floor(c->px), cy = (int)floor(c->py);
   make_cam(&nc, 1);                                   /* the camera the game rendered this tick with */
   zt_hd_dbg_piece[7] = 0; zt_hd_dbg_obj[7] = 0;
   for (i = 0; i < s->npc; i++)
@@ -790,7 +852,7 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
       p->du = x0 + s->pc[i].gc * pwu; p->pw = pwu;
       p->dv = -piece_z(s, s0, i, t) / 64.0 + y0 + s->pc[i].gr * phu; p->ph = phu;
     }
-    else if (!s->pc[i].type && !(s->pc[i].obj & 0x1000000) && M32(s, s->pc[i].obj + 0x0E) == 0x159FE)
+    else if (!s->pc[i].type && !(s->pc[i].obj & 0x1000000) && M32(s, s->pc[i].obj + 0x0E) == G->blood)
     {
       /* blood drops ($159FE): state +$34, stretch k = +$35, scale s, rows from the object's row
          ((horizon - bob - z) * s / 64 + 40). 0: droplet s/8 x s/4, centred, raised s/8; 1: splat
@@ -839,7 +901,7 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
       int k;
       double depth;
       if (mx < 0 || mx > 31 || my < 0 || my > 31) continue;
-      ty = M8(s, 0xFF7BC6 + M8(s, mapp + my * 32 + mx));
+      ty = M8(s, RA(0xFF7BC6) + M8(s, mapp + my * 32 + mx));
       if (!item_type[ty] || !item_cache[ty].n) continue;
       id = 0x1000000 | my << 8 | mx;
       for (k = 0; k < s->npc; k++) if (s->pc[k].obj == id) break;
@@ -862,7 +924,7 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
   }
   {
     cam_t cs = *c;
-    cs.hor += s->hor_spr - S16(s, 0xFF7752);
+    cs.hor += s->hor_spr - S16(s, ZV_CUR + 6);
     for (i = 0; i < n; i++) draw_piece(&list[i], &cs, W, H, focal, bob);
   }
 }
@@ -913,7 +975,7 @@ static struct { uint32 ptr; int loaded, w, h, art_row, map_row, indexed; uint8 *
 static void sky_png_load(uint32 ptr);
 static int sky_from_map(void)
 {
-  uint32 ptr = live_l(0xFF271E);
+  uint32 ptr = live_l(RA(0xFF271E));
   int ty, wt;
   if (zt_hd_sky_ext == 2 && ptr != sky_png.ptr) sky_png_load(ptr);
   if (!((ptr >= 0x200 && ptr + 16 * 256 <= rom_size) || (ptr >= 0xFF0000 && ptr <= 0xFFF000)) || (ptr & 1)) return 0;
@@ -936,7 +998,7 @@ static void sky_capture(void)
   int mode = reg[11] & 3, line = 60, hs, two_a, live2a, sx, y;
   ha = hsb + (mode == 3 ? line * 4 : mode == 2 ? (line & ~7) * 4 : 0);
   hs = ((vram_b(ha) << 8) | vram_b(ha + 1)) & 0x3FF;
-  live2a = 2 * (live_w(0xFF0E04) & 511);
+  live2a = 2 * (live_w(RA(0xFF0E04)) & 511);
   two_a = (16 - hs) & 511;                            /* scroll = -2*angle + 16: angle mod 256 */
   if (abs(((two_a + 512 - live2a + 512) & 1023) - 512) < abs(((two_a - live2a + 512) & 1023) - 512)) two_a += 512;
   for (sx = 8; sx < 336; sx += 8)                     /* the native view (32..288) and the columns the game
@@ -1280,7 +1342,7 @@ static void sky_texture(uint32 base, int r0, int r1, int band0)
   for (i = 0; i < 64; i++) MIX(zt_vdp_pixel(i));
   MIX(r0); MIX(r1); MIX(band0); MIX(base); MIX(zt_hd_sky_ext); MIX(sky_png.loaded); MIX(sky_png.ptr);
   MIX(planet_ov.valid); MIX(planet_ov.top); MIX(art_top); MIX(art_rows); MIX(nstar_cols); MIX(sky_gen);
-  MIX(live_l(0xFF271E));
+  MIX(live_l(RA(0xFF271E)));
 #undef MIX
   if (key == skytex_key && skytex && rows == skytex_rows && r0 == skytex_r0) return;
   if (rows * 1024 > skytex_cap) { free(skytex); skytex = malloc(sizeof(uint16) * rows * 1024); skytex_cap = skytex ? rows * 1024 : 0; }
@@ -1353,7 +1415,7 @@ static int in_gameplay(void)
   uint32 age;
   if (!snaps[1].valid) { zt_hd_dbg[4]++; return 0; }
   age = (live_w(0xFF0000) - snaps[1].vbl) & 0xFFFF;
-  if (!live_w(0xFF7770))                                                                   /* ZT_INGAME */
+  if (!live_w(ZV_INGAME))
   {
     /* not in play yet, but the level's first frame (snapshot from the level-start render) is fading
        in: show it in HD already */
@@ -1386,6 +1448,8 @@ static void view_sprites(int px, int py, int W, int H, int ybase, double g)
     int x = (((vram_b(e + 6) << 8) | vram_b(e + 7)) & 0x1FF) - 128;
     int tile = at & 0x7FF, pal = (at >> 13) & 3, hf = (at >> 11) & 1, vf = (at >> 12) & 1, sx, sy;
     if (x <= -64 || x + hs * 8 <= 32 || x >= 288 || y + vs * 8 <= 40 || y >= 120) continue;
+    if (!(at & 0x8000)) continue;                       /* low priority: behind the view's tiles (Underground
+                                                           keeps a block of them there) */
     for (sy = 0; sy < vs * 8; sy++)
       for (sx = 0; sx < hs * 8; sx++)
       {
@@ -1709,7 +1773,7 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
   render_background(&snaps[1], W, H, f);
   {
     cam_t cw = c;                               /* walls and edges use the horizon as the game drew them */
-    cw.hor += snaps[1].hor_walls - S16(&snaps[1], 0xFF7752);
+    cw.hor += snaps[1].hor_walls - S16(&snaps[1], ZV_CUR + 6);
     render_walls(&snaps[1], &cw, W, H, focal);
     render_edges(&snaps[1], &cw, W, H, focal);
   }
@@ -1810,14 +1874,14 @@ static int weapon_rank(int type)
     default: return 0;                                                            /* fists */
   }
 }
-#define SLOT_TYPE(i) READ_BYTE(work_ram, 0x1037 + 4 * (i))
+#define SLOT_TYPE(i) READ_BYTE(work_ram, (RA(0xFF1036) + 1 + 4 * (i)) & 0xFFFF)
 void zt_hd_pad(unsigned short *pad)
 {
   enum { HOLD = 8, GAP = 8 };
   static int prev_type = -1, prev_slot = -1, target = -1, t, presses;
-  int slot = READ_BYTE(work_ram, 0x104A), type, i;
+  int slot = READ_BYTE(work_ram, RA(0xFF104A) & 0xFFFF), type, i;
   if (pad_hold) *pad = 0;                                             /* the menu just closed: see zt_hd_input */
-  if (!zt_hd_autoswitch || !live_w(0xFF7770) || slot > 4) { target = -1; prev_slot = -1; return; }   /* ZT_INGAME */
+  if (!zt_hd_autoswitch || !live_w(ZV_INGAME) || slot > 4) { target = -1; prev_slot = -1; return; }
   type = SLOT_TYPE(slot);
   if (target < 0 && slot == prev_slot && prev_type && !type)       /* the current weapon just ran out */
   {
@@ -2027,7 +2091,7 @@ uint16 *zt_hd_compose(const uint16 *native, int npitch, int nw, int nh)
   ensure_buffers();
   zt_hd_output_size(&ow, &oh);
   /* tell the ROM patch not to render between ticks */
-  WRITE_BYTE(work_ram, 0x7772, 0); WRITE_BYTE(work_ram, 0x7773, 1);
+  WRITE_BYTE(work_ram, ZV_HD & 0xFFFF, 0); WRITE_BYTE(work_ram, (ZV_HD + 1) & 0xFFFF, 1);
   game = in_gameplay();
   if (game) sky_capture();
   else { memset(sky_known, 0, sizeof sky_known); planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0; }   /* a new level may have another sky */
