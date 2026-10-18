@@ -1485,14 +1485,17 @@ static void hud_text(int x, int y, const char *t, uint16 c)
   }
 }
 #define YELLOW(c) (((c) >> 11) >= 22 && (((c) >> 5) & 63) >= 44 && ((c) & 31) < 12)
-/* a counter's digits: the bounding box of the yellow pixels inside its black box; 0 if none */
+/* a counter's digits: the bounding box of the pixels inside its black box that differ from the box (its top
+   left pixel is always blank); 0 if none. Not just yellow: the health digits go yellow, orange, red as health
+   drops ($D98E: colour 7 above 80, 7/6 dither above 60, 6 above 40, 6/5 above 20, then 5). */
 static int counter_box(const uint16 *native, int npitch, int x0, int y0, int w, int h, int *bb)
 {
   int x, y;
+  uint16 bg = native[y0 * npitch + x0];
   bb[0] = x0 + w; bb[1] = y0 + h; bb[2] = -1; bb[3] = -1;
   for (y = y0; y < y0 + h; y++)
     for (x = x0; x < x0 + w; x++)
-      if (YELLOW(native[y * npitch + x]))
+      if (native[y * npitch + x] != bg)
       { if (x < bb[0]) bb[0] = x; if (y < bb[1]) bb[1] = y; if (x >= bb[2]) bb[2] = x + 1; if (y >= bb[3]) bb[3] = y + 1; }
   return bb[2] > 0;
 }
