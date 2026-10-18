@@ -69,7 +69,8 @@ typedef struct {
   uint32 empty_tab;                           /* per cell type: no floor edges */
   uint32 tex_base, tex_ram;                   /* wall textures: fixed, or a pointer in RAM */
   int objd;                                   /* object fields from +$0E on are this much further (Beyond 4) */
-  int portrait[4];                            /* HUD: the ID card photo on the original screen (x, y, w, h) */
+  int portrait[4], map[4];                    /* HUD: the ID card photo and the map on the original screen (x, y,
+                                                 w, h) */
   ram_shift_t ram[12];                        /* Rev A RAM -> this game's, by range */
 } zt_game_t;
 
@@ -77,15 +78,15 @@ static const zt_game_t zt_games[] = {
   /* Zero Tolerance (Rev A; also the mouse hack ROM) */
   {1, 0xB9A6, 0x9D72, 0x1329A, 0x13360, 0x13388, 0x1BCB4, 0x113EE, 0xEDA0, 0x923A, 133,
    0x944E, 0x9454, {0x9458, 0x9458, 0x9458}, 0x945E, 0x9862, {0xAF5E, 0xAD8C, 0xB000, 0xAE2E},
-   0x4392, 0xED50, 0, 0, 0x159FE, 0xBB90, 0x12EF26, 0, 0, {196, 132, 48, 64}, {{0}}},
+   0x4392, 0xED50, 0, 0, 0x159FE, 0xBB90, 0x12EF26, 0, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0}}},
   /* Zero Tolerance: Underground */
   {3, 0xBC4C, 0x9FB0, 0x13C52, 0x13D18, 0x13D40, 0x1C680, 0x11866, 0xF218, 0x92FC, 228,
    0x968C, 0x9692, {0x9696, 0x9696, 0x9696}, 0x969C, 0x9AA0, {0xB19C, 0xAFCA, 0xB23E, 0xB06C},
-   0x4454, 0xF1C8, 0, 0, 0x163BE, 0xBE36, 0, 0xFF0E74, 0, {196, 132, 48, 64}, {{0xFF0E74, 0xFFF000, 4}}},
+   0x4454, 0xF1C8, 0, 0, 0x163BE, 0xBE36, 0, 0xFF0E74, 0, {196, 132, 48, 64}, {100, 130, 92, 92}, {{0xFF0E74, 0xFFF000, 4}}},
   /* Beyond Zero Tolerance (its solid walls: plain, and two that also register the wall) */
   {4, 0xB250, 0x94A2, 0x16990, 0x16A58, 0x16A80, 0x19FA8, 0x1100E, 0xE8A0, 0x8A20, 134,
    0x8C38, 0x8C3E, {0x8C42, 0x8C48, 0x8C56}, 0x8C64, 0x9068, {0xA570, 0xA396, 0xA61A, 0xA440},
-   0x3B58, 0, 0xFFD46E, 0xFFD442, 0x1838A, 0xB41E, 0, 0xFFD45E, 4, {236, 150, 42, 58},
+   0x3B58, 0, 0xFFD46E, 0xFFD442, 0x1838A, 0xB41E, 0, 0xFFD45E, 4, {236, 150, 42, 58}, {99, 129, 94, 95},
    {{0xFF0DCC, 0xFF0E26, 8}, {0xFF0E26, 0xFF0E3C, 0x22}, {0xFF0E3C, 0xFF104A, 0x24}, {0xFF104A, 0xFF1088, 0x30},
     {0xFF1088, 0xFF11E8, 0x40}, {0xFF11E8, 0xFF121A, 0x4A}, {0xFF121A, 0xFF24E8, 0x4E}, {0xFF24E8, 0xFF2708, 0x2CA},
     {0xFF2708, 0xFF7F41, 0x2C0}}},
@@ -1756,7 +1757,7 @@ static void draw_hud(const uint16 *native, int npitch, int px, int py, int W, in
     hud_counter(native, npitch, 295, 71, 18, 10, cx + 19, cy + 1, 0);
   }
   hud_counter(native, npitch, 3, 71, 26, 10, RX + RW - 9, RY + 15, 1);
-  hud_native(100, 130, 92, 92, native, npitch, RX + 6, RY + 29, 92, 92);
+  hud_native(G->map[0], G->map[1], G->map[2], G->map[3], native, npitch, RX + 6, RY + 29, 92, 92);
   hud_native(40, 0, 240, 36, native, npitch, BX, BY, 240, 36);
   for (b = 0; b < 5; b++)
   {
