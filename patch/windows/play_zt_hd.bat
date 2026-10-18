@@ -23,9 +23,12 @@ set "CFG=%HERE%zt-hd-retroarch.cfg"
 >>"%CFG%" echo video_window_custom_size_enable = "true"
 >>"%CFG%" echo video_window_width = "1280"
 >>"%CFG%" echo video_window_height = "720"
-rem the game: your own ROM next to this file; RetroArch applies the .ips of the same name as it loads it
+rem the game: your own ROM next to this file; RetroArch applies the .ips of the same name as it loads it.
+rem Another game: drop its ROM on this file, or pass it (play_zt_hd.bat ZTU.bin).
 set "ROM=%HERE%Zero Tolerance (USA, Europe) (Rev A).gen"
 if exist "%HERE%Zero Tolerance (high fps).gen" set "ROM=%HERE%Zero Tolerance (high fps).gen"
+if not "%~1"=="" set "ROM=%~f1"
+if not "%~1"=="" if not exist "%ROM%" if exist "%HERE%%~1" set "ROM=%HERE%%~1"
 if not exist "%ROM%" (
   echo Put your copy of the game, named "Zero Tolerance (USA, Europe) (Rev A).gen", in this folder.
   pause

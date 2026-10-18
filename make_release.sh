@@ -1,7 +1,8 @@
 #!/bin/sh
 # Release packages (no game data) into release/:
 #   sh make_release.sh <version> <steam ew_core.dll> <windows x64 core .dll> <macOS arm64 core .dylib> <macOS x86_64 core .dylib>
-# Build the binaries first (README.md); patch/zt_high_fps.ips comes from python3 patch/make_patch.py.
+# Build the binaries first (README.md); patch/zt_high_fps.ips (and the other games' ZT.ips, ZTU.ips, BZT.ips,
+# when their ROMs are here) come from python3 patch/make_patch.py.
 set -e
 V=$1; STEAM_DLL=$2; WIN_DLL=$3; MAC_ARM=$4; MAC_X86=$5
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -10,6 +11,8 @@ ROMIPS="Zero Tolerance (USA, Europe) (Rev A).ips"
 [ -f "$IPS" ] || { echo "no $IPS: run python3 patch/make_patch.py"; exit 1; }
 rm -rf "$OUT/$V"; mkdir -p "$OUT/$V"
 crlf() { sed 's/$/\r/' "$1" > "$2"; }
+# the other games' patches, named after their ROMs
+other_ips() { for f in ZT ZTU BZT; do [ -f "$HERE/patch/$f.ips" ] && cp "$HERE/patch/$f.ips" "$1/"; done; true; }
 
 # Steam drop-in
 D="$OUT/$V/zero_tolerance_hd_steam"; mkdir -p "$D"
@@ -22,7 +25,7 @@ crlf "$HERE/LICENSE" "$D/LICENSE.txt"
 # Windows RetroArch
 D="$OUT/$V/zero_tolerance_hd_windows_retroarch"; mkdir -p "$D"
 x86_64-w64-mingw32-strip -o "$D/genesis_plus_gx_zt_hd_libretro.dll" "$WIN_DLL"
-cp "$IPS" "$D/$ROMIPS"
+cp "$IPS" "$D/$ROMIPS"; other_ips "$D"
 cp "$HERE/patch/windows/play_zt_hd.bat" "$D/"
 crlf "$HERE/patch/windows/README.txt" "$D/README.txt"
 crlf "$HERE/patch/windows/zt-hd-core-options.cfg" "$D/zt-hd-core-options.cfg"
@@ -32,7 +35,7 @@ crlf "$HERE/LICENSE" "$D/LICENSE.txt"
 D="$OUT/$V/zero_tolerance_hd_macos_retroarch"; mkdir -p "$D/tools"
 strip -x -o "$D/tools/genesis_plus_gx_zt_hd.dylib" "$MAC_ARM"
 strip -x -o "$D/tools/genesis_plus_gx_zt_hd_x86_64.dylib" "$MAC_X86"
-cp "$IPS" "$D/$ROMIPS"
+cp "$IPS" "$D/$ROMIPS"; other_ips "$D"
 cp "$HERE/patch/play_mac.sh" "$D/"
 cp "$HERE/patch/tools/retroarch-zt-hd.cfg" "$HERE/patch/tools/zt-hd-core-options.cfg" "$D/tools/"
 cp "$HERE/patch/mac/README.txt" "$D/README.txt"

@@ -10,6 +10,7 @@ Files
   genesis_plus_gx_zt_hd_libretro.dll       Genesis Plus GX core with the HD renderer (64-bit)
   Zero Tolerance (USA, Europe) (Rev A).ips the fixed-rate patch; RetroArch applies it to the ROM of the
                                            same name as it loads it (your ROM file is not changed)
+  ZT.ips, ZTU.ips, BZT.ips                 the same for the other games (below)
   zt-hd-core-options.cfg                   the core's settings (HD on, 1280x720, FOV 106, ...)
   play_zt_hd.bat                           starts RetroArch with all of the above
 
@@ -19,6 +20,13 @@ Use
      (the Rev A cartridge, SHA-1 d6d9733a619ba6be0dd76591d8dec621e4fdc17e).
   3. Double-click play_zt_hd.bat. If it says RetroArch wasn't found, open the .bat in Notepad and set RA
      to the full path of retroarch.exe.
+
+Other games
+  The core also plays these, each with its own .ips (RetroArch pairs a ROM with the .ips of the same name):
+    ZT.bin    Zero Tolerance (Rev A) with the Sega Mouse hack  SHA-1 e0dd42d65302c62904bbbe226efc68e2c71fdfab
+    ZTU.bin   Zero Tolerance: Underground                      SHA-1 9f8df85692bea0b794dbf6a5f4f3ee579840694a
+    BZT.BIN   Beyond Zero Tolerance                            SHA-1 ab7791def9ad91c0f0870b1f928ceb13b76acb9c
+  Put the ROM in this folder under that name and drop it on play_zt_hd.bat (or: play_zt_hd.bat ZTU.bin).
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
