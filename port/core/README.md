@@ -88,11 +88,15 @@ are saved to `zt_hd.cfg` in RetroArch's save folder. That file overrides the cor
 
 ## Hooks (68000 PC)
 
-- `$B9A6`: render start. Ignored for between-ticks renders (`$FF7762` set).
-- `$1BCB4`: sprite draw (a0 object, a1 sub-frame record, a2 piece base).
-- ROM long at `$1D0034` (patch jump table +52): end of the tick render. The snapshot is committed here.
+Rev A addresses; each game's are in `zt_hd.c` (`zt_games[]`: hooks, cell handlers, tables, RAM ranges,
+HUD positions), chosen by the game id in the ROM patch's entry table (found by its `ZTHD` mark).
 
-The core sets `$FF7772` = 1 (`ZT_HD`) so the ROM skips the 68000's in-between renders and the NTSC top band.
+- `$B9A6`: render start. Ignored for between-ticks renders (`ZT_RONLY`, patch variables +$22, set).
+- `$1BCB4`: sprite draw (a0 object, a1 sub-frame record, a2 piece base).
+- Patch entry table +52: end of the tick render. The snapshot is committed here.
+
+The core sets `ZT_HD` (patch variables +$32; the variables are at `$FFF800`) so the ROM skips the 68000's
+in-between renders and the NTSC top band.
 
 ## Notes
 

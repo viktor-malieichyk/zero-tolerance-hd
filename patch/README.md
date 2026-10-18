@@ -1,13 +1,14 @@
 # Zero Tolerance high frame rate patch
 
-For **Zero Tolerance (USA, Europe) (Rev A)**, SHA-1 `d6d9733a619ba6be0dd76591d8dec621e4fdc17e`.
-Emulator use only: it needs far more CPU than a real Mega Drive has.
+For **Zero Tolerance (USA, Europe) (Rev A)** (SHA-1 `d6d9733a619ba6be0dd76591d8dec621e4fdc17e`), the Rev A
+ROM with the Sega Mouse hack, **Zero Tolerance: Underground** and **Beyond Zero Tolerance** (file names and
+hashes in `games.py`). Emulator use only: it needs far more CPU than a real Mega Drive has.
 
 ## What it does
 
 - **Fixed-rate game logic.** Logic runs at 10 Hz no matter how fast frames render. The original
   ties everything to frame rate and runs ~7–11 fps in play, so 10 Hz matches typical speed.
-  Build with another rate via `python3 make_patch.py <hz>`.
+  Build with another rate via `python3 make_patch.py --hz <rate>`.
   Frames between logic ticks re-render with the camera interpolated between the last two ticks
   (one tick of display latency), so turning and walking are smooth while game speed stays constant.
 - **Single-VBlank framebuffer upload.** The original uploads each frame in two halves across two
@@ -18,7 +19,10 @@ Emulator use only: it needs far more CPU than a real Mega Drive has.
 
 ## Use
 
-Apply `zt_high_fps.ips` to the ROM, or use `Zero Tolerance (high fps).gen`.
+Apply `zt_high_fps.ips` to the ROM, or use `Zero Tolerance (high fps).gen` (the other games: `<name>.ips`,
+`<name> (high fps).bin`). The mouse hack ROM keeps its mouse turning: the patch's VBlank ends through the
+hack's mouse reader. Underground's own frame governor (it skipped frames after a slow render) is replaced by
+the fixed logic tick.
 
 Genesis Plus GX (RetroArch): set **CPU Speed** (`genesis_plus_gx_overclock`).
 
@@ -59,9 +63,12 @@ Windows executable here.
 
 ## Build
 
-`python3 make_patch.py` checks the ROM hash, assembles `zt_high_fps.asm` with `vasmm68k_mot`
-([vasm](http://sun.hasenbraten.de/vasm/), `make CPU=m68k SYNTAX=mot`; in `tools/` or on `PATH`),
-applies the hooks, and writes the ROM and the IPS.
+`python3 make_patch.py [GAME ...]` checks each ROM's hash, assembles `zt_high_fps.asm` with `vasmm68k_mot`
+([vasm](http://sun.hasenbraten.de/vasm/), `make CPU=m68k SYNTAX=mot`; in `tools/` or on `PATH`) with that
+game's addresses from `games.py`, applies the hooks (each checks the original instructions it replaces),
+and writes the ROM and the IPS. The games are one engine rebuilt: the addresses were found by aligning
+each ROM's disassembly with Rev A's and checked by hand. The patch keeps its variables at `$FFF800`
+(above the stack, untouched by every game).
 
 `tools/bench.py` is a headless libretro harness (Genesis Plus GX) used for testing. For example:
 `python3 tools/bench.py "Zero Tolerance (high fps).gen" --state tools/level1.state --speed --oc 1000`

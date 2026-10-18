@@ -13,15 +13,23 @@ Mods for **Zero Tolerance** (Technopop, Accolade, 1994), the Mega Drive / Genesi
 3. **Steam drop-in** (`port/core/steam/`): the HD renderer as a replacement `ew_core.dll` for the Steam
    release (QUByte Classics), so it runs from the Steam game without RetroArch.
 
-No game data is included. You need your own copy of the game: the cartridge ROM
-**Zero Tolerance (USA, Europe) (Rev A)** (SHA-1 `d6d9733a619ba6be0dd76591d8dec621e4fdc17e`) or the
-Steam release.
+No game data is included. You need your own copy of the game. Supported ROMs (`patch/games.py`):
+
+| Game | File in this folder | SHA-1 |
+|---|---|---|
+| Zero Tolerance (USA, Europe) (Rev A) | `Zero Tolerance (USA, Europe) (Rev A).gen` | `d6d9733a619ba6be0dd76591d8dec621e4fdc17e` |
+| Zero Tolerance, Rev A with the Sega Mouse hack | `ZT.bin` | `e0dd42d65302c62904bbbe226efc68e2c71fdfab` |
+| Zero Tolerance: Underground | `ZTU.bin` | `9f8df85692bea0b794dbf6a5f4f3ee579840694a` |
+| Beyond Zero Tolerance (unreleased sequel, build 062393a) | `BZT.BIN` | `ab7791def9ad91c0f0870b1f928ceb13b76acb9c` |
+
+The Steam drop-in supports the Steam release of the first game.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `patch/zt_high_fps.asm`, `patch/make_patch.py` | the ROM patch (68000 assembly) and its builder (cartridge and Steam ROM) |
+| `patch/games.py` | the supported ROMs and each one's addresses (the HD core's are in `zt_hd.c`, `zt_games[]`) |
 | `patch/play_mac.sh`, `patch/tools/*.cfg` | macOS launcher and RetroArch settings |
 | `patch/windows/`, `patch/mac/` | Windows launcher (`play_zt_hd.bat`), READMEs and settings for the RetroArch packages |
 | `make_release.sh` | builds the release packages (Steam, Windows RetroArch, macOS RetroArch) into `release/` |
@@ -38,12 +46,12 @@ Requirements: Python 3 (with Pillow and NumPy for `make_sky.py`), a C compiler, 
 [vasm](http://sun.hasenbraten.de/vasm/) (`vasmm68k_mot`, built with `make CPU=m68k SYNTAX=mot`) in
 `patch/tools/` or on `PATH`, and for Windows builds mingw-w64.
 
-**ROM patch.** Put the Rev A ROM, named `Zero Tolerance (USA, Europe) (Rev A).gen`, in this folder, then
+**ROM patch.** Put the ROMs, named as in the table above, in this folder, then
 
-    python3 patch/make_patch.py
+    python3 patch/make_patch.py            # or name some: zt, zt_mouse, ztu, bzt
 
-It writes `patch/Zero Tolerance (high fps).gen` and `patch/zt_high_fps.ips`. The HD core needs this
-patched ROM.
+For each ROM found it writes a patched ROM and an IPS into `patch/` (Rev A: `Zero Tolerance (high fps).gen`
+and `zt_high_fps.ips`; the others `<name> (high fps).bin` and `<name>.ips`). The HD core needs a patched ROM.
 
 **HD core** (RetroArch, macOS / Linux / Windows):
 
