@@ -34,4 +34,13 @@ if not exist "%ROM%" (
   pause
   exit /b 1
 )
+rem keys for the modern keyboard (W A S D C E free, Space = A) and the mouse: a RetroArch game override for
+rem this ROM, refreshed while it is ours (first line)
+set "KEYS=%HERE%zt-hd-keys.cfg"
+if not exist "%KEYS%" set "KEYS=%HERE%..\tools\zt-hd-keys.cfg"
+for %%I in ("%RA%") do set "RADIR=%%~dpI"
+for %%I in ("%ROM%") do set "ROMNAME=%%~nI"
+set "OVR=%RADIR%config\Genesis Plus GX"
+if not exist "%OVR%" mkdir "%OVR%"
+if not exist "%OVR%\%ROMNAME%.cfg" (copy /y "%KEYS%" "%OVR%\%ROMNAME%.cfg" >nul) else (findstr /b /c:"# Zero Tolerance HD" "%OVR%\%ROMNAME%.cfg" >nul && copy /y "%KEYS%" "%OVR%\%ROMNAME%.cfg" >nul)
 start "" "%RA%" -L "%HERE%genesis_plus_gx_zt_hd_libretro.dll" --appendconfig "%HERE%zt-hd-retroarch.cfg" "%ROM%"

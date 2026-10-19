@@ -35,7 +35,12 @@ int (*zt_hd_key)(unsigned retrok);   /* set by libretro.c: is this key held? */
 int (*zt_hd_joy)(unsigned id);       /* set by libretro.c: is pad 1's button (libretro joypad id) held? */
 int (*zt_hd_analog)(unsigned index, unsigned id);   /* set by libretro.c: pad 1's stick axis (libretro analog
                                         index left 0 / right 1, id x 0 / y 1), -32768..32767 */
-int zt_hd_sticks = 1;                /* twin-stick controls: left stick walks and strafes, right stick turns */
+int zt_hd_sticks = 1;                /* gamepad: twin stick (left stick walks and strafes, right stick turns) */
+int zt_hd_kbd = 1;                   /* keyboard: modern (WASD walk and strafe, arrows turn, Space, Ctrl, E, C) */
+int zt_hd_mouse = 1;                 /* mouse turning (and buttons) */
+int zt_hd_mouse_sens = 3;            /* its speed: mouse_list index 1..5 */
+int (*zt_hd_mouse_fn)(unsigned id);  /* set by the frontend: pad 1's mouse (libretro mouse id; x: counts since
+                                        the last frame) */
 int zt_hd_turn_speed = 32;           /* the right stick's fastest turn: angle units (512 a circle) per tick */
 void (*zt_hd_av_changed)(void);      /* set by libretro.c: output size changed */
 char zt_hd_cfg_path[1024];           /* settings file written by the in-game menu */
@@ -230,15 +235,19 @@ static int prepare_rom(void)
   return 1;
 }
 
-/* ---------------------------------------------------------------- twin-stick controls
+/* ---------------------------------------------------------------- modern controls
    Once a logic tick the game's movement routine (Rev A $DAB8) turns the pad into targets: turn rate +-16
    (Left/Right), forward 40 / back -20 (Up/Down; agent 3 45 / -35), strafe +-40 (A + Left/Right, and then no
    walking); it eases the camera's turn rate and speeds toward them, turns and moves. A + Up jumps, A + Down
    crouches. Underground and Beyond have other numbers (zt_game_t.spd) and Beyond its own turn easing; the
-   mouse hack strafes with Left/Right and turns by the mouse. Where the routine turns the camera (G->move)
-   this sets from the sticks: the turn rate itself (no easing in: the right stick turns at once), the
-   forward and strafe targets (together, scaled by how far the left stick is pushed). A alone jumps, L3
-   held crouches. With the sticks centred the game's own controls are untouched. */
+   mouse hack strafes with Left/Right and turns by the mouse.
+   The modern controls (twin-stick gamepad, WASD keyboard, mouse) are gathered once a frame (zt_hd_pad):
+   walking and strafing as a request -1..1 each, turning as angle units accumulated frame by frame
+   (turn_acc). Where the routine turns the camera (G->move) this sets the forward and strafe targets from
+   the request, and hands the game the whole units of turn_acc as this tick's turn rate (no easing in).
+   With nothing modern in use the game's own controls are untouched. A alone jumps, crouch is held.
+   Turning shows at once: the HD camera is the last tick's angle plus the turn handed over since (pend_turn,
+   in the game but not yet rendered) plus turn_acc, instead of trailing a tick behind (view_predicted). */
 static void ram_ww(uint32 a, int v) { WRITE_BYTE(work_ram, a & 0xFFFF, (v >> 8) & 0xFF); WRITE_BYTE(work_ram, (a + 1) & 0xFFFF, v & 0xFF); }
 
 static int stick(unsigned index, double *x, double *y)   /* radial dead zone; 0..1 beyond it */
@@ -251,40 +260,121 @@ static int stick(unsigned index, double *x, double *y)   /* radial dead zone; 0.
   return 1;
 }
 
-static void sticks_tick(void)
+static double mv_fwd, mv_side;      /* this frame's walk request: forward (+) / back, right (+) / left */
+static int mv_on, turn_on;          /* walking / turning by modern controls this frame */
+static int crouch_on;               /* crouch held (L3, C) */
+static int space_on;                /* Space held (modern keyboard) */
+static double turn_acc;             /* turn asked for and not yet handed to the game (angle units) */
+static int pend_turn;               /* turn handed to the game since the last rendered tick */
+static int pred_ticks;              /* ticks the HD camera still shows the predicted angle for */
+static const double mouse_list[] = {0, 0.05, 0.08, 0.12, 0.18, 0.27};   /* angle units per mouse count */
+
+enum { ZM_X = 0, ZM_Y = 1, ZM_LEFT = 2, ZM_RIGHT = 3, ZM_WHEELUP = 4, ZM_WHEELDOWN = 5 };   /* libretro mouse ids */
+static int key(unsigned k) { return zt_hd_key && zt_hd_key(k); }
+static int dying(void) { return live_w(RA(0xFF0DE2)) != 0; }
+static int classic_scheme(void) { return !G->ctl_ptr || live_l(G->ctl_ptr) == G->ctl_classic; }
+
+/* once a frame, before the emulated frame: read the modern controls */
+static void controls_frame(unsigned short *pad)
 {
-  static int turned, crouched, prev_a;
-  double lx, ly, rx, ry;
-  int walk, turn, pad, a, h;
-  if (!zt_hd_sticks || !zt_hd_analog) return;
-  if (live_w(RA(0xFF0DE2))) { turned = crouched = 0; return; }   /* dying: the game's own sequence */
-  walk = stick(0, &lx, &ly); turn = stick(1, &rx, &ry);
+  enum { K_LCTRL = 306, K_RCTRL = 305, K_UP = 273, K_DOWN = 274, K_RIGHT = 275, K_LEFT = 276 };
+  double lx = 0, ly = 0, rx = 0, ry, per, f, sd, m;
+  int ingame = live_w(ZV_INGAME) && !dying(), kb = zt_hd_kbd && zt_hd_key;
+  per = snaps[0].valid ? (double)((snaps[1].vbl - snaps[0].vbl) & 0xFFFF) : 6;   /* frames a tick */
+  if (per < 2 || per > 30) per = 6;
+  mv_on = turn_on = crouch_on = space_on = 0; mv_fwd = mv_side = 0;
+  if (zt_hd_sticks && zt_hd_analog)
+  {
+    if (stick(0, &lx, &ly)) mv_on = 1;
+    if (stick(1, &rx, &ry)) turn_on = 1;
+    if (zt_hd_joy && zt_hd_joy(13)) *pad |= INPUT_B;              /* R2: fire */
+    if (zt_hd_joy && zt_hd_joy(12)) *pad |= INPUT_C;              /* L2: next weapon */
+    if (zt_hd_joy && zt_hd_joy(14)) crouch_on = 1;                /* L3 */
+    if (!ingame && mv_on)                                         /* menus: the left stick is the D-pad */
+    {
+      if (ly < -0.5) *pad |= INPUT_UP;
+      if (ly > 0.5) *pad |= INPUT_DOWN;
+      if (lx < -0.5) *pad |= INPUT_LEFT;
+      if (lx > 0.5) *pad |= INPUT_RIGHT;
+    }
+  }
+  f = -ly; sd = lx;
+  if (kb)
+  {
+    int w = key('w') || key(K_UP), s = key('s') || key(K_DOWN), a = key('a'), d = key('d');
+    if (w || s || a || d) { mv_on = 1; f += w - s; sd += d - a; }
+    if (key(' '))                                                 /* jump: A alone; in Underground's other */
+    {                                                             /* schemes A turns: jumped here, A hidden */
+      space_on = 1;
+      if (!ingame || classic_scheme()) *pad |= INPUT_A; else *pad &= ~INPUT_A;
+    }
+    if (key(K_LCTRL) || key(K_RCTRL)) *pad |= INPUT_B;            /* fire */
+    if (key('e')) *pad |= INPUT_C;                                /* next weapon */
+    if (key('c')) crouch_on = 1;
+  }
+  if (zt_hd_mouse && zt_hd_mouse_fn && zt_hd_mouse_sens > 0)
+  {
+    if (zt_hd_mouse_fn(ZM_LEFT)) *pad |= INPUT_B;
+    if (zt_hd_mouse_fn(ZM_RIGHT) || zt_hd_mouse_fn(ZM_WHEELUP) ||
+        zt_hd_mouse_fn(ZM_WHEELDOWN)) *pad |= INPUT_C;
+  }
+  m = sqrt(f * f + sd * sd);
+  if (m > 1) { f /= m; sd /= m; }
+  mv_fwd = f; mv_side = sd;
+  if (!ingame) { turn_acc = 0; mv_on = turn_on = 0; return; }
+  if (turn_on)
+  {
+    double n = fabs(rx), c = 0.3 * n + 0.7 * n * n;               /* finer aim near the centre */
+    turn_acc += (rx < 0 ? -c : c) * zt_hd_turn_speed / per;
+  }
+  if (kb && (key(K_LEFT) != key(K_RIGHT)))
+  {
+    turn_on = 1; turn_acc += (key(K_RIGHT) ? 1 : -1) * zt_hd_turn_speed / per;
+  }
+  if (zt_hd_mouse && zt_hd_mouse_fn && zt_hd_mouse_sens > 0)
+  {
+    int dx = zt_hd_mouse_fn(ZM_X);
+    if (dx) { turn_on = 1; turn_acc += dx * mouse_list[zt_hd_mouse_sens]; }
+  }
+  if (turn_acc > 256) turn_acc = 256; else if (turn_acc < -256) turn_acc = -256;
+  if (turn_on && pred_ticks < 2) pred_ticks = 2;        /* show it from this frame, before the game's tick */
+}
+
+/* the logic tick's movement, at G->move */
+static void controls_tick(void)
+{
+  static int turned, crouched, prev_a, prev_space;
+  int pad, a, h, r;
+  if (dying()) { turned = crouched = 0; turn_acc = 0; return; }   /* the game's own sequence */
   pad = READ_BYTE(work_ram, 0x002E);                       /* this tick's pad: Up Down Left Right B C A Start */
   h = (int16)live_w(RA(0xFF0E1A));                         /* camera height: > 0 jumping, < 0 crouching */
-  if (walk)
+  if (mv_on)
   {
     int fast = live_w(RA(0xFF1030)) == 3;                  /* the agent */
-    int f = (int)lround(ly < 0 ? -ly * G->spd[fast ? 2 : 0] : ly * G->spd[fast ? 3 : 1]);
-    int st = (int)lround(lx * G->spd[4]);
-    if (h < 0) { f /= 2; st /= 2; }                        /* crouching: half speed, as the game does */
-    ram_ww(RA(0xFF0E84), f); ram_ww(RA(0xFF0E88), st);
+    int fw = (int)lround(mv_fwd > 0 ? mv_fwd * G->spd[fast ? 2 : 0] : -mv_fwd * G->spd[fast ? 3 : 1]);
+    int st = (int)lround(mv_side * G->spd[4]);
+    if (h < 0) { fw /= 2; st /= 2; }                       /* crouching: half speed, as the game does */
+    ram_ww(RA(0xFF0E84), fw); ram_ww(RA(0xFF0E88), st);
   }
-  if (turn)
+  if (turn_on || turned || fabs(turn_acc) >= 0.5)
   {
-    double n = fabs(rx), c = 0.3 * n + 0.7 * n * n;        /* finer aim near the centre */
-    ram_ww(RA(0xFF0E7E), (int)lround((rx < 0 ? -c : c) * zt_hd_turn_speed));
-    turned = 1;
+    r = (int)lround(turn_acc);
+    if (r > 128) r = 128; else if (r < -128) r = -128;
+    turn_acc -= r;
+    ram_ww(RA(0xFF0E7E), r);                               /* this tick's turn, applied right after */
+    pend_turn += r;
+    pred_ticks = 2;
+    turned = turn_on || r;                                 /* let go: one more tick at 0, then the game's */
   }
-  else if (turned) { ram_ww(RA(0xFF0E7E), 0); turned = 0; }   /* let go: stop at once */
   a = (pad >> 6) & 1;
-  if (a && !prev_a && !(pad & 0x0F) && (!G->ctl_ptr || live_l(G->ctl_ptr) == G->ctl_classic))   /* A alone (A + a
-                                                              direction is the game's) */
+  if ((a && !prev_a && !(pad & 0x0F) && (zt_hd_sticks || zt_hd_kbd) && classic_scheme()) ||  /* A alone (A + a */
+      (space_on && !prev_space && !classic_scheme()))                                       /* direction: the game's) */
   {
     if (h == 0 && !live_w(RA(0xFF0E20))) ram_ww(RA(0xFF0E20), 9);   /* on the ground: jump (its upward speed) */
     else if (h < 0) ram_ww(RA(0xFF0E1C), 0);                      /* crouching: stand up */
   }
-  prev_a = a;
-  if (zt_hd_joy && zt_hd_joy(14))                          /* L3: crouch (height target, hold time) */
+  prev_a = a; prev_space = space_on;
+  if (crouch_on)                                           /* crouch (height target, hold time) */
   {
     ram_ww(RA(0xFF0E1C), -16); ram_ww(RA(0xFF0E24), 30); crouched = 1;
   }
@@ -295,6 +385,15 @@ static void sticks_tick(void)
   }
 }
 
+/* the angle the HD camera shows: interpolated (t) between the last two ticks, or, while modern controls
+   turn, ahead: the last tick's plus what has been asked for since */
+static int view_predicted(double *a)
+{
+  if (pred_ticks <= 0) return 0;
+  *a = (M16(&snaps[1], ZV_CUR + 4) & 511) + pend_turn + turn_acc;
+  return 1;
+}
+
 /* ---------------------------------------------------------------- 68k hooks */
 void zt_hd_hook(unsigned int pc, unsigned int *regs)
 {
@@ -302,7 +401,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
   uint32 i;
   if (!zt_hd_enabled || !prepare_rom()) return;
   zt_hd_dbg[0]++;
-  if (pc == G->move) { sticks_tick(); return; }
+  if (pc == G->move) { controls_tick(); return; }
   if (pc == G->render)                                /* render start */
   {
     if (live_w(ZV_RONLY)) return;                     /* between-ticks render: not a tick */
@@ -396,6 +495,8 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     snaps[0] = snaps[1];
     snaps[1] = *s;
     building = 0;
+    pend_turn = 0;                                    /* the turn handed over is in this tick's angle */
+    if (pred_ticks > 0) pred_ticks--;
     zt_hd_dbg[3]++;
   }
   else if (pc == zt_hd_after_init_pc && building)     /* level-start render finished (the screen fades in) */
@@ -414,6 +515,7 @@ void zt_hd_hook(unsigned int pc, unsigned int *regs)
     snaps[0] = *s;
     snaps[1] = *s;
     building = 0;
+    pend_turn = 0; turn_acc = 0; pred_ticks = 0;
   }
 }
 
@@ -428,7 +530,7 @@ static void snap_cam(const snap_t *s, double *x, double *y, double *a, double *h
   *x = M16(s, ZV_CUR); *y = M16(s, ZV_CUR + 2); *a = M16(s, ZV_CUR + 4) & 511; *h = S16(s, ZV_CUR + 6);
 }
 
-static void make_cam(cam_t *c, double t)
+static void make_cam(cam_t *c, double t, int predict)   /* predict: the view's angle (view_predicted) */
 {
   double x0, y0, a0, h0, x1, y1, a1, h1, th;
   snap_cam(&snaps[1], &x1, &y1, &a1, &h1);
@@ -437,6 +539,7 @@ static void make_cam(cam_t *c, double t)
     t = 1;                                            /* teleport: no interpolation */
   c->x = x0 + wrapd(x1 - x0, 8192) * t; c->y = y0 + wrapd(y1 - y0, 8192) * t;
   c->ang = a0 + wrapd(a1 - a0, 512) * t; c->hor = h0 + (h1 - h0) * t;
+  if (predict) { double pa; if (view_predicted(&pa)) c->ang = pa; }
   th = c->ang * 2 * M_PI / 512;
   c->dx = sin(th); c->dy = -cos(th);                  /* angle 0 = -Y, 128 = +X */
   c->px = (c->x - c->dx * 32) / 256.0;                /* the game pulls back by dir/8 */
@@ -927,7 +1030,7 @@ static void render_sprites(const snap_t *s, const snap_t *s0, const cam_t *c, do
   double bob = S16(s, RA(0xFF116E)), nhor = s->hor_spr;
   uint32 mapp = M32(s, RA(0xFF1024));
   int i, j, n = 0, rad = M16(s, RA(0xFF0EB4)), mx, my, cx = (int)floor(c->px), cy = (int)floor(c->py);
-  make_cam(&nc, 1);                                   /* the camera the game rendered this tick with */
+  make_cam(&nc, 1, 0);                                   /* the camera the game rendered this tick with */
   zt_hd_dbg_piece[7] = 0; zt_hd_dbg_obj[7] = 0;
   for (i = 0; i < s->npc; i++)
   {
@@ -1870,7 +1973,7 @@ static void panel_hd(const uint16 *native, int npitch, int px, int py, int W, in
   if (period < 1 || period > 30) period = 6;
   t = (double)((live_w(0xFF0000) - snaps[1].vbl) & 0xFFFF) / period;
   if (t > 1) t = 1;
-  make_cam(&c, t);
+  make_cam(&c, t, 1);
   zt_hd_dbg_cam[0] = c.x; zt_hd_dbg_cam[1] = c.y; zt_hd_dbg_cam[2] = c.ang; zt_hd_dbg_cam[3] = c.hor; zt_hd_dbg_cam[7] = t;
   render_background(&snaps[1], W, H, f);
   {
@@ -1982,20 +2085,8 @@ void zt_hd_pad(unsigned short *pad)
   enum { HOLD = 8, GAP = 8 };
   static int prev_type = -1, prev_slot = -1, target = -1, t, presses;
   int slot = READ_BYTE(work_ram, RA(0xFF104A) & 0xFFFF), type, i;
-  if (pad_hold) *pad = 0;                                             /* the menu just closed: see zt_hd_input */
-  else if (zt_hd_sticks && zt_hd_joy)
-  {
-    double x, y;
-    if (zt_hd_joy(13)) *pad |= INPUT_B;                               /* R2: fire */
-    if (zt_hd_joy(12)) *pad |= INPUT_C;                               /* L2: next weapon */
-    if (zt_hd_analog && !live_w(ZV_INGAME) && stick(0, &x, &y))       /* menus: the left stick is the D-pad */
-    {
-      if (y < -0.5) *pad |= INPUT_UP;
-      if (y > 0.5) *pad |= INPUT_DOWN;
-      if (x < -0.5) *pad |= INPUT_LEFT;
-      if (x > 0.5) *pad |= INPUT_RIGHT;
-    }
-  }
+  controls_frame(pad);
+  if (pad_hold) { *pad = 0; mv_on = turn_on = crouch_on = 0; turn_acc = 0; }   /* the menu just closed: see zt_hd_input */
   if (!zt_hd_autoswitch || !live_w(ZV_INGAME) || slot > 4) { target = -1; prev_slot = -1; return; }
   type = SLOT_TYPE(slot);
   if (target < 0 && slot == prev_slot && prev_type && !type)       /* the current weapon just ran out */
@@ -2029,7 +2120,7 @@ static const float hud_list[] = {0, 1, 1.5f, 2, 2.5f, 3, 4};
 static const unsigned key_codes[] = {'g', 'j', 'k', 'l', 'm', 'n', 't', 'u', 'y', 'b', 'v', 9, '`'};
 static const char *key_names[] = {"G", "J", "K", "L", "M", "N", "T", "U", "Y", "B", "V", "Tab", "`"};
 #define NKEYS 13
-enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_STICKS, M_TURN, M_MENUKEY, M_GAME, M_COUNT };
+enum { M_RES, M_FOV, M_LAYOUT, M_TOGGLE, M_HUD, M_WEAPON, M_AUTOSW, M_SKY, M_SKYEXT, M_SHADE, M_STICKS, M_KBD, M_MOUSE, M_TURN, M_MENUKEY, M_GAME, M_COUNT };
 static int menu_game = -1;           /* M_GAME's value: the game to switch to when the menu closes */
 static int menu_count(void) { return zt_hd_ngames > 1 ? M_COUNT : M_GAME; }   /* "Game" only with a choice */
 static const char *layout_names[] = {"HD only", "Side by side", "Top / bottom", "Switch with key"};
@@ -2060,7 +2151,9 @@ static void value_text(int item, char *b, int n)
     case M_SKY: snprintf(b, n, "%s", zt_hd_sky_fill ? "Fill view height" : "Original band"); break;
     case M_SHADE: snprintf(b, n, "%s", zt_hd_smooth ? "Smooth" : "Dither (original)"); break;
     case M_SKYEXT: snprintf(b, n, "%s", zt_hd_sky_ext == 2 ? "Enhanced" : zt_hd_sky_ext ? "Stars" : "Black"); break;
-    case M_STICKS: snprintf(b, n, "%s", zt_hd_sticks ? "Twin stick" : "Original"); break;
+    case M_STICKS: snprintf(b, n, "%s", zt_hd_sticks ? "Twin stick" : "Classic"); break;
+    case M_KBD: snprintf(b, n, "%s", zt_hd_kbd ? "Modern (WASD)" : "Classic"); break;
+    case M_MOUSE: if (zt_hd_mouse) snprintf(b, n, "Speed %d", zt_hd_mouse_sens); else snprintf(b, n, "Off"); break;
     case M_TURN: snprintf(b, n, "%d deg/s%s", (zt_hd_turn_speed * 3600 + 256) / 512, zt_hd_turn_speed == 16 ? " (D-pad)" : ""); break;
     case M_MENUKEY: snprintf(b, n, "%s", key_names[idx_of_key(zt_hd_menu_key)]); break;
     case M_GAME: snprintf(b, n, "%s%s", zt_hd_games[menu_game < 0 ? zt_hd_game_cur : menu_game],
@@ -2068,17 +2161,18 @@ static void value_text(int item, char *b, int n)
   }
 }
 static const char *item_names[] = {"Resolution", "Field of view", "Original screen", "Switch key", "HUD scale",
-                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Controls",
-                                   "Stick turn speed", "Menu key", "Game"};
+                                   "Weapon", "Out of ammo", "Sky", "Sky beyond band", "Shading", "Gamepad",
+                                   "Keyboard", "Mouse turning", "Turn speed", "Menu key", "Game"};
 
 void zt_hd_save_cfg(void)
 {
   FILE *f;
   if (!zt_hd_cfg_path[0] || !(f = fopen(zt_hd_cfg_path, "w"))) return;
   fprintf(f, "res=%dx%d\nfov=%g\nlayout=%d\ntoggle_key=%u\nhud=%g\nweapon=%d\nautoswitch=%d\nsky_fill=%d\nsky_ext=%d\nsmooth=%d\nmenu_key=%u\n"
-          "sticks=%d\nturn=%d\n",
+          "sticks=%d\nturn=%d\nkeyboard=%d\nmouse=%d\n",
           zt_hd_w, zt_hd_h, zt_hd_fov, zt_hd_layout, zt_hd_toggle_key, zt_hd_ui_scale, zt_hd_weapon, zt_hd_autoswitch,
-          zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key, zt_hd_sticks, zt_hd_turn_speed);
+          zt_hd_sky_fill, zt_hd_sky_ext, zt_hd_smooth, zt_hd_menu_key, zt_hd_sticks, zt_hd_turn_speed,
+          zt_hd_kbd, zt_hd_mouse ? zt_hd_mouse_sens : 0);
   fclose(f);
 }
 
@@ -2101,6 +2195,8 @@ void zt_hd_load_cfg(void)
     else if (sscanf(line, "sky_ext=%d", &a) == 1) zt_hd_sky_ext = a < 0 ? 0 : a > 2 ? 2 : a;
     else if (sscanf(line, "menu_key=%u", &u) == 1) zt_hd_menu_key = u;
     else if (sscanf(line, "sticks=%d", &a) == 1) zt_hd_sticks = a != 0;
+    else if (sscanf(line, "keyboard=%d", &a) == 1) zt_hd_kbd = a != 0;
+    else if (sscanf(line, "mouse=%d", &a) == 1) { zt_hd_mouse = a > 0; if (a >= 1 && a <= 5) zt_hd_mouse_sens = a; }
     else if (sscanf(line, "turn=%d", &a) == 1 && a >= 8 && a <= 64) zt_hd_turn_speed = a;
   }
   fclose(f);
@@ -2122,6 +2218,11 @@ static void menu_change(int item, int dir)
     case M_SHADE: zt_hd_smooth = !zt_hd_smooth; break;
     case M_SKYEXT: zt_hd_sky_ext = (zt_hd_sky_ext + dir + 3) % 3; planet_ov.tried = planet_ov.valid = 0; sky_png.ptr = 0; break;
     case M_STICKS: zt_hd_sticks = !zt_hd_sticks; break;
+    case M_KBD: zt_hd_kbd = !zt_hd_kbd; break;
+    case M_MOUSE:                                 /* Off, speed 1..5 */
+      i = (zt_hd_mouse ? zt_hd_mouse_sens : 0) + dir; i = (i + 6) % 6;
+      zt_hd_mouse = i > 0; if (i) zt_hd_mouse_sens = i;
+      break;
     case M_TURN: zt_hd_turn_speed = turn_list[(idx_of_turn() + dir + 5) % 5]; break;
     case M_MENUKEY: zt_hd_menu_key = key_codes[(idx_of_key(zt_hd_menu_key) + dir + NKEYS) % NKEYS]; break;
     case M_GAME:
@@ -2140,6 +2241,12 @@ static void menu_change(int item, int dir)
    A) change, B closes; Mode stays the game's: QUByte's Steam ROM rewinds with it). Returns 1 while
    the menu is open (emulation paused). After the menu closes, the game gets no pad input until every
    button is released, so the button that closed it doesn't also fire or switch weapons. */
+/* the frontend should hold the mouse (hidden, kept in the window): turning with it now */
+int zt_hd_wants_mouse(void)
+{
+  return zt_hd_enabled && zt_hd_mouse && !menu_open && rom_be && live_w(ZV_INGAME);
+}
+
 int zt_hd_input(void)
 {
   enum { K_MENU, K_TOGGLE, K_UP, K_DOWN, K_LEFT, K_RIGHT, J_MENU, J_UP, J_DOWN, J_LEFT, J_RIGHT, J_A, J_B, N_IN };
@@ -2198,7 +2305,7 @@ static void text(int x, int y, const char *str, int ts, uint16 col)
 
 static void draw_menu(void)
 {
-  int nm = menu_count(), ts = oh >= 720 ? 2 : 1, lh = 16 * ts, bw = 54 * 8 * ts, bh = (nm + 6) * lh;
+  int nm = menu_count(), ts = oh >= 720 ? 2 : 1, lh = 14 * ts, bw = 54 * 8 * ts, bh = (nm + 6) * lh;
   int bx = (ow - bw) / 2, by = (oh - bh) / 2, i, x, y;
   char b[64];
   for (y = by; y < by + bh && y < oh; y++)          /* darkened box */

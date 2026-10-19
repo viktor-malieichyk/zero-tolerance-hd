@@ -21,6 +21,12 @@ case "$(uname -m)" in arm64) CORE=genesis_plus_gx_zt_hd.dylib ;; *) CORE=genesis
 if [ "$(file -b /Applications/RetroArch.app/Contents/MacOS/RetroArch | grep -c arm64)" = 0 ]; then CORE=genesis_plus_gx_zt_hd_x86_64.dylib; fi
 # a downloaded core is quarantined and RetroArch would refuse to load it
 xattr -d com.apple.quarantine "$T/$CORE" 2>/dev/null
+# keys for the modern keyboard (W A S D C E free, Space = A) and the mouse: a RetroArch game override for
+# this ROM, refreshed while it is ours (first line); appended settings would end up in retroarch.cfg
+OVR="$HOME/Library/Application Support/RetroArch/config/Genesis Plus GX"
+OVF="$OVR/$(basename "${ROM%.*}").cfg"
+mkdir -p "$OVR"
+if [ ! -f "$OVF" ] || head -1 "$OVF" | grep -q "^# Zero Tolerance HD"; then cp "$T/zt-hd-keys.cfg" "$OVF"; fi
 # RetroArch settings for this game only: the template plus the core options file's absolute path
 CFG="$T/retroarch-zt-hd.local.cfg"
 { cat "$T/retroarch-zt-hd.cfg"; echo "core_options_path = \"$T/zt-hd-core-options.cfg\""; } > "$CFG"

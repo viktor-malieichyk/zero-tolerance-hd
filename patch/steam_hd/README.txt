@@ -30,24 +30,34 @@ Other games: Zero Tolerance: Underground and Beyond Zero Tolerance
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, controls, stick turn
-        speed, menu key, and the game when there is a choice (see above).
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, gamepad, keyboard,
+        mouse turning, turn speed, menu key, and the game when there is a choice (see above).
         Saved to zt_hd.cfg in the game folder.
-  Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, D on the
+  Controller: Z opens and closes the menu (the frontend's Z button: LB on an Xbox pad, ` on the
         keyboard; rebind it in the frontend's Set input), D-pad up/down select, left/right or C change,
         B closes.
-  Space fast forward while held (the frontend's Mode button; 4x, shown by a fast-forward sign at the top
+  Tab   fast forward while held (the frontend's Mode button; 4x, shown by a fast-forward sign at the top
         right; zt_fast_forward in ew_core_options.cfg sets the speed, 2-8, or 1 to turn it off).
   G     switch between the HD view and the original screen
-  Twin stick (on by default; "Controls" in the menu): left stick walks and strafes, both at once and as
-        fast as it is pushed; right stick turns ("Stick turn speed" in the menu). A on its own jumps (in
-        Underground only with its classic control setting, where A is otherwise unused), L3 held crouches,
-        RT fires (B), LT next weapon (C). The D-pad and the buttons keep their original functions. The
-        sticks, triggers and L3 are read from the first game controller directly (zt_hd_log.txt names
-        it).
+  Controls (menu: Gamepad, Keyboard, Mouse turning, Turn speed). They all work at once and can be mixed;
+  the modern ones only take over while used, the D-pad and buttons always do what they did.
+    Gamepad, Twin stick (default): left stick walks and strafes (together, as fast as it is pushed), right
+        stick turns; A on its own jumps, L3 held crouches, R2 fires, L2 next weapon. Classic: the original
+        controls only (strafe with A + Left/Right).
+    Keyboard, Modern (default): W A S D walk and strafe, arrow keys turn (up / down walk), Space jumps,
+        Ctrl fires, E next weapon, C crouches (held). Classic: the frontend's keys only.
+    Mouse turning (speed 1-5, default 3): the mouse turns, left button fires; the right button opens the
+        frontend's menu and lets the mouse go until the next left click.
+  Turning with the right stick, the arrow keys or the mouse shows at once: the HD view turns ahead of the
+  game's 10 Hz logic, which catches up within a tenth of a second.
+  In Underground A only jumps with its classic control setting (its options); in its others A turns, and
+  Space still jumps.
+  The sticks, triggers and L3 are read from the first game controller directly (zt_hd_log.txt names it).
+  The frontend's default keys now leave W A S D C free: arrows, Space A, Ctrl B, E C, Enter Start, Q X,
+  R Y, ` Z, Tab Mode (fast forward). If you set your own keys before, set them away from W A S D C (Set
+  input).
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.
-  The controller and keyboard buttons are the frontend's, as before.
 
 The frontend's own menu (display, Set input, ...)
   Opens with the right mouse button, or the right stick click on the controller (this package moves it

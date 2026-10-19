@@ -217,6 +217,8 @@ static int key_down(unsigned retrok)
   else switch (retrok)
   {
     case 9: vk = VK_TAB; break;
+    case 32: vk = VK_SPACE; break;
+    case 305: case 306: vk = VK_CONTROL; break;
     case 13: vk = VK_RETURN; break;
     case 27: vk = VK_ESCAPE; break;
     case 96: vk = VK_OEM_3; break;
@@ -244,6 +246,7 @@ static struct
   const char *(*name)(void *);
   int16_t (*axis)(void *, int);
   uint8_t (*button)(void *, int);
+  int (*show_cursor)(int);
   void *gc;
   int tried, wait;
 } sdl;
@@ -264,6 +267,7 @@ static void controller_poll(void)
     SDLFN(is_gc, "SDL_IsGameController"); SDLFN(open, "SDL_GameControllerOpen");
     SDLFN(attached, "SDL_GameControllerGetAttached"); SDLFN(name, "SDL_GameControllerName");
     SDLFN(axis, "SDL_GameControllerGetAxis"); SDLFN(button, "SDL_GameControllerGetButton");
+    SDLFN(show_cursor, "SDL_ShowCursor");
 #undef SDLFN
     if (!sdl.init_sub || !sdl.was_init || !sdl.num || !sdl.is_gc || !sdl.open || !sdl.attached || !sdl.name ||
         !sdl.axis || !sdl.button)
@@ -291,10 +295,54 @@ static void controller_poll(void)
             | (sdl.button(sdl.gc, BUTTON_LEFTSTICK) ? 1 << RETRO_DEVICE_ID_JOYPAD_L3 : 0);
 }
 
+/* Mouse turning (zt_hd.c): while the HD renderer wants the mouse (in a level, the option on, its menu
+   closed) and the game window has the focus, the cursor is held at the window's centre and hidden, and its
+   movement each frame is the libretro mouse's x. The right button opens the frontend's own menu: the
+   mouse is let go then, until the next left click in the window. */
+int zt_hd_wants_mouse(void);
+static int mouse_dx, mouse_held, mouse_paused;
+
+static HWND own_window(void)
+{
+  DWORD pid = 0;
+  HWND fg = GetForegroundWindow();
+  if (!fg) return NULL;
+  GetWindowThreadProcessId(fg, &pid);
+  return pid == GetCurrentProcessId() ? fg : NULL;
+}
+
+static void mouse_poll(void)
+{
+  HWND w = own_window();
+  RECT r;
+  POINT c, p;
+  int want = w && zt_hd_wants_mouse();
+  mouse_dx = 0;
+  if (want && (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) mouse_paused = 1;      /* the frontend's menu */
+  if (mouse_paused && want && (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) mouse_paused = 0;
+  want = want && !mouse_paused;
+  if (want && GetClientRect(w, &r))
+  {
+    c.x = (r.left + r.right) / 2; c.y = (r.top + r.bottom) / 2;
+    ClientToScreen(w, &c);
+    if (mouse_held && GetCursorPos(&p)) mouse_dx = p.x - c.x;
+    SetCursorPos(c.x, c.y);
+    if (!mouse_held) { mouse_held = 1; if (sdl.show_cursor) sdl.show_cursor(0); zlog("mouse: held for turning"); }
+  }
+  else if (mouse_held) { mouse_held = 0; if (sdl.show_cursor) sdl.show_cursor(1); }
+}
+
 static int16_t input_cb(unsigned port, unsigned device, unsigned index, unsigned id)
 {
   uint16_t bits;
   if (device == RETRO_DEVICE_KEYBOARD) return key_down(id);
+  if (device == RETRO_DEVICE_MOUSE)
+  {
+    if (port || !mouse_held) return 0;
+    if (id == RETRO_DEVICE_ID_MOUSE_X) return mouse_dx;
+    if (id == RETRO_DEVICE_ID_MOUSE_LEFT) return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    return 0;                                  /* the right button is the frontend's menu */
+  }
   if (device == RETRO_DEVICE_ANALOG) return port == 0 && index < 2 && id < 2 ? stick_axis[index * 2 + id] : 0;
   if (device != RETRO_DEVICE_JOYPAD || port > 1) return 0;
   bits = pad[port] | (port == 0 ? pad_extra : 0);
@@ -759,12 +807,14 @@ API void ew_core_emulate(void)
   if (zt_hd_game_req >= 0) switch_game();
 #endif
   controller_poll();
+  mouse_poll();
   ff_active = ff_speed() > 1 && ((pad[0] >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1);
   n = ff_active ? ff_speed() : 1;
   for (i = 0; i < n; i++)
   {
     naudio = 0;                                /* the last run's sound only */
     retro_run();
+    mouse_dx = 0;                              /* fast forward: the movement once */
   }
 }
 
@@ -834,8 +884,10 @@ static const int retro_id[12] = {
   RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_RIGHT,
   RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_START,
   RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_SELECT };
-/* SDL scancodes: Up, Down, Left, Right, Z, X, C, Return, A, S, D, Space */
-static const int def_keys[12] = {82, 81, 80, 79, 29, 27, 6, 40, 4, 22, 7, 44};
+/* SDL scancodes, chosen around the modern keyboard (WASD walk, arrows turn, C crouch, read by zt_hd.c):
+   arrows; A Space (jump), B Ctrl (fire), C E (next weapon), Start Return; X Q, Y R, Z ` (also the HD menu),
+   Mode Tab (fast forward) */
+static const int def_keys[12] = {82, 81, 80, 79, 44, 224, 8, 40, 20, 21, 53, 43};
 /* SDL hat directions, then joystick buttons */
 static const int def_joy[12] = {1, 4, 8, 2, 0, 1, 5, 7, 2, 3, 4, 6};
 

@@ -30,18 +30,28 @@ Other games
 
 In game
   M     settings menu (pauses): resolution, field of view, original screen layout, switch key, HUD scale,
-        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, controls, stick turn
-        speed, menu key.
+        weapon, out of ammo (switch weapon / keep), sky, sky beyond band, shading, gamepad, keyboard,
+        mouse turning, turn speed, menu key.
         Saved to zt_hd.cfg in RetroArch's saves folder.
   Controller: Z (RetroPad R, e.g. RB) opens and closes the menu, D-pad up/down select, left/right or
         C (RetroPad A) change, B closes.
   G     switch between the HD view and the original screen (when layout = switch with key)
-  Twin stick (on by default; "Controls" in the menu): left stick walks and strafes, both at once and as
-        fast as it is pushed; right stick turns ("Stick turn speed" in the menu). A on its own jumps (in
-        Underground only with its classic control setting, where A is otherwise unused), L3 held crouches,
-        R2 fires (B), L2 next weapon (C). The D-pad and the buttons keep their original functions; the
-        left stick also works as the D-pad outside the levels. RetroArch's "Analog to Digital Type" should
-        stay at None for the left stick.
+  Controls (menu: Gamepad, Keyboard, Mouse turning, Turn speed). They all work at once and can be mixed;
+  the modern ones only take over while used, the D-pad and buttons always do what they did.
+    Gamepad, Twin stick (default): left stick walks and strafes (together, as fast as it is pushed), right
+        stick turns; A on its own jumps, L3 held crouches, R2 fires, L2 next weapon. Classic: the original
+        controls only (strafe with A + Left/Right).
+    Keyboard, Modern (default): W A S D walk and strafe, arrow keys turn (up / down walk), Space jumps,
+        Ctrl fires, E next weapon, C crouches (held). Classic: RetroArch's key bindings only.
+    Mouse turning (speed 1-5, default 3): the mouse turns, left button fires, right button or wheel next weapon.
+  Turning with the right stick, the arrow keys or the mouse shows at once: the HD view turns ahead of the
+  game's 10 Hz logic, which catches up within a tenth of a second.
+  In Underground A only jumps with its classic control setting (its options); in its others A turns, and
+  Space still jumps.
+  play_zt_hd.bat sets RetroArch up for this per game (a game override: config/Genesis Plus GX/<ROM name>.cfg):
+        player 1's keys off W A S D C E (Space is Genesis A, R Genesis Y, Tab Genesis Z), RetroArch's hotkeys
+        on Space, E, R, M, N off, the mouse held (F11 lets it go; RetroArch's menu, F1, too). Leave
+        "Analog to Digital Type" at None for the left stick.
   When a weapon runs out of ammo the next best one is selected for you (guns first, fists last); turn it
   off with "Out of ammo" in the menu.
 

@@ -25,16 +25,25 @@ draws those frames. Cost on Apple Silicon (native), emulation included: about 2.
   modules along the bottom, built from the original HUD's pieces (design: `port/design`): left the portrait
   with "+ health" under it, middle the weapons bar (ammo counts redrawn in Menlo Bold at the output
   resolution, `zt_hud_font.h` from `make_hud_font.py`), right "ENEMIES <count>" over the map.
-- `genesis_plus_gx_zt_hd_sticks`: `on` (default) or `off`. Twin-stick controls: the left stick walks and
-  strafes (together, scaled by how far it is pushed), the right stick turns at once (no easing in);
-  A on its own jumps, L3 held crouches, R2 fires (B), L2 next weapon (C). With the sticks centred the game's
-  own controls are untouched (the D-pad and buttons work as before). Done where each game's movement
-  routine turns the camera (`zt_game_t.move`): the turn rate and the forward / strafe targets are written
-  there, in the game's own units (`zt_game_t.spd`). Underground's A jump only with its classic control
-  setting (in its others A turns). The Steam DLL reads the sticks, triggers and L3 through the frontend's
-  SDL2.
-- `genesis_plus_gx_zt_hd_turn`: the right stick's fastest turn in angle units (512 a circle) per 10 Hz tick:
-  16 (the D-pad's, about 110 deg/s), 24, 32 (default, 225 deg/s), 40, 48.
+- `genesis_plus_gx_zt_hd_sticks` (gamepad): `on` (twin stick, default) or `off` (classic). The left stick
+  walks and strafes (together, scaled by how far it is pushed), the right stick turns; A on its own jumps,
+  L3 held crouches, R2 fires (B), L2 next weapon (C).
+- `genesis_plus_gx_zt_hd_keyboard`: `modern` (default) or `classic`. W A S D walk and strafe, arrow keys
+  turn (up / down walk), Space jumps, Ctrl fires, E next weapon, C crouches. Needs RetroArch's player 1
+  keys off W A S (the launchers write a game override, `patch/tools/zt-hd-keys.cfg`).
+- `genesis_plus_gx_zt_hd_mouse`: `off` or speed `1` ... `5` (default 3, angle units per mouse count
+  0.05 ... 0.27): the mouse turns, left button fires, right button or wheel next weapon.
+- `genesis_plus_gx_zt_hd_turn`: the fastest turn with the right stick or the arrow keys, in angle units (512
+  a circle) per 10 Hz tick: 16 (the D-pad's, about 110 deg/s), 24, 32 (default, 225 deg/s), 40, 48.
+
+  All of them work together; with none in use the game's own controls are untouched. They are read once a
+  frame (`controls_frame`): walking as a request, turning accumulated in angle units. Where each game's
+  movement routine turns the camera (`zt_game_t.move`) the forward and strafe targets are written from the
+  request in the game's own units (`zt_game_t.spd`), and the whole units of the accumulated turn become the
+  tick's turn rate. The HD camera shows the last tick's angle plus the turn handed over and still
+  accumulated, so turning has no lag on screen. Underground's A jump only with its classic control setting
+  (in its others A turns; Space jumps there directly). The Steam DLL reads the sticks, triggers and L3
+  through the frontend's SDL2 and holds the mouse itself.
 - `genesis_plus_gx_zt_hd_autoswitch`: `on` (default) or `off`. When the current weapon runs out of ammo, switch
   to the best weapon left (a gun, then grenades or mines, then the fire extinguisher; the fists, the melee
   weapon, last) by pressing C for you. Off: the original (you are left on the fists).

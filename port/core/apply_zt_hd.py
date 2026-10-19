@@ -414,27 +414,27 @@ patch(L, """    if (var.value) zt_hd_smooth = strcmp(var.value, "dither") != 0;"
     if (var.value) zt_hd_turn_speed = atoi(var.value);
     zt_hd_analog = zt_analog_fn;""")
 patch(O, """      "smooth"
-   },""", """      "smooth"
+   },""", done_if='"genesis_plus_gx_zt_hd_sticks"', new="""      "smooth"
    },
    {
       "genesis_plus_gx_zt_hd_sticks",
-      "Zero Tolerance HD Twin-Stick Controls",
+      "Zero Tolerance HD Gamepad",
       NULL,
-      "On: left stick walks and strafes (both at once, at any speed), right stick turns; A jumps, L3 crouches, R2 fires (B), L2 next weapon (C). The D-pad and buttons keep working as in the original. Off: the original controls only.",
+      "Twin stick: left stick walks and strafes (both at once, at any speed), right stick turns; A jumps, L3 crouches, R2 fires (B), L2 next weapon (C). The D-pad and buttons keep working as in the original. Classic: the original controls only.",
       NULL,
       "hacks",
       {
-         { "on",  "On" },
-         { "off", "Off (original)" },
+         { "on",  "Twin stick" },
+         { "off", "Classic" },
          { NULL, NULL },
       },
       "on"
    },
    {
       "genesis_plus_gx_zt_hd_turn",
-      "Zero Tolerance HD Stick Turn Speed",
+      "Zero Tolerance HD Turn Speed",
       NULL,
-      "The right stick's fastest turn, in degrees per second (the D-pad turns at about 110).",
+      "The fastest turn with the right stick or the arrow keys (modern keyboard), in degrees per second (the D-pad turns at about 110).",
       NULL,
       "hacks",
       {
@@ -446,5 +446,52 @@ patch(O, """      "smooth"
          { NULL, NULL },
       },
       "32"
+   },""")
+# modern keyboard and mouse (separate patches, like the sky one)
+patch(L, """static int zt_analog_fn(unsigned index, unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_ANALOG, index, id) : 0; }""",
+      """static int zt_analog_fn(unsigned index, unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_ANALOG, index, id) : 0; }
+static int zt_mouse_fn(unsigned id) { return input_state_cb ? input_state_cb(0, RETRO_DEVICE_MOUSE, 0, id) : 0; }""")
+patch(L, """    zt_hd_analog = zt_analog_fn;""", """    zt_hd_analog = zt_analog_fn;
+    zt_hd_mouse_fn = zt_mouse_fn;
+    var.key = "genesis_plus_gx_zt_hd_keyboard"; var.value = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+    if (var.value) zt_hd_kbd = strcmp(var.value, "classic") != 0;
+    var.key = "genesis_plus_gx_zt_hd_mouse"; var.value = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+    if (var.value) { zt_hd_mouse = strcmp(var.value, "off") != 0; if (atoi(var.value) >= 1) zt_hd_mouse_sens = atoi(var.value); }""")
+patch(O, """      "32"
+   },""", done_if='"genesis_plus_gx_zt_hd_keyboard"', new="""      "32"
+   },
+   {
+      "genesis_plus_gx_zt_hd_keyboard",
+      "Zero Tolerance HD Keyboard",
+      NULL,
+      "Modern: WASD walk and strafe, arrow keys turn (up / down walk), Space jumps, Ctrl fires, E next weapon, C crouches (needs RetroArch's player 1 keys off W, A, S: the launchers set that up). Classic: RetroArch's key bindings only.",
+      NULL,
+      "hacks",
+      {
+         { "modern",  "Modern (WASD)" },
+         { "classic", "Classic" },
+         { NULL, NULL },
+      },
+      "modern"
+   },
+   {
+      "genesis_plus_gx_zt_hd_mouse",
+      "Zero Tolerance HD Mouse Turning",
+      NULL,
+      "Turn with the mouse (left button fires, right button or wheel next weapon), at this speed. RetroArch must hold the mouse (Grab mouse, or the launchers' setting).",
+      NULL,
+      "hacks",
+      {
+         { "3",   "Speed 3" },
+         { "1",   "Speed 1" },
+         { "2",   "Speed 2" },
+         { "4",   "Speed 4" },
+         { "5",   "Speed 5" },
+         { "off", "Off" },
+         { NULL, NULL },
+      },
+      "3"
    },""")
 print("applied to", G)
